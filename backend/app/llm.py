@@ -10,6 +10,8 @@ from openai import OpenAI
 
 MODEL_ENV_VAR = "OPENAI_MODEL"
 
+JSON_REMINDER = "Answer with JSON only."
+
 
 class OpenAITextModel:
     """TextModel backed by the OpenAI Responses API in JSON mode.
@@ -35,7 +37,10 @@ class OpenAITextModel:
         response = self.client.responses.create(
             model=self.model_name,
             instructions=instructions,
-            input=material,
+            input=[
+                {"role": "user", "content": material},
+                {"role": "user", "content": JSON_REMINDER},
+            ],
             text={"format": {"type": "json_object"}},
         )
         return response.output_text
