@@ -7,7 +7,7 @@ It finds out where each child struggles and reports to teachers and parents.
 ## Tech stack
 - Backend: Python 3.12, FastAPI, Pydantic, pytest. Managed with uv.
 - Frontend: React, TypeScript, Vite.
-- AI: Claude API.
+- AI: OpenAI API for the prototype, behind backend/app/llm.py so the provider can be swapped.
 
 ## How we work
 - Show a plan before changing files. Wait for approval.
@@ -25,3 +25,4 @@ It finds out where each child struggles and reports to teachers and parents.
 - Type hints on every function.
 - Small, pure functions where possible.
 - Names and comments in English.
+- Do not write tests that only check the value of a constant.
