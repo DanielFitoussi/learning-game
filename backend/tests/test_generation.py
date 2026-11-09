@@ -10,7 +10,7 @@ from app.generation import (
     build_instructions,
     generate_questions,
 )
-from app.llm import OpenAITextModel
+from app.llm import JSON_REMINDER, OpenAITextModel
 
 MATERIAL = "When we add 7 and 5 we get 12. Adding means putting groups together."
 
@@ -229,6 +229,9 @@ def test_openai_model_sends_json_mode_request(monkeypatch: pytest.MonkeyPatch) -
     assert client.responses.kwargs == {
         "model": "test-model",
         "instructions": "Answer in JSON.",
-        "input": MATERIAL,
+        "input": [
+            {"role": "user", "content": MATERIAL},
+            {"role": "user", "content": JSON_REMINDER},
+        ],
         "text": {"format": {"type": "json_object"}},
     }
