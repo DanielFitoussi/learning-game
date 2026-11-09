@@ -157,6 +157,70 @@ def test_instructions_ask_for_json() -> None:
     assert "JSON" in build_instructions("math", "addition", 3)
 
 
+# --- Mistake maps -----------------------------------------------------------------------
+
+MAPPED_CHAPTER = "addition and subtraction"
+ONLY_THESE_TAGS = "Use only these mistake tags"
+DIFFERENT_MISTAKES = "each wrong option must reveal a different mistake"
+
+
+def test_instructions_list_allowed_tags_when_map_exists() -> None:
+    instructions = build_instructions("math", MAPPED_CHAPTER, 3)
+    assert ONLY_THESE_TAGS in instructions
+    for line in [
+        "- count: off by one, a counting slip (7 + 5 = 11)",
+        "- op: used the other operation (9 - 4 = 13)",
+        "- concat: glued the digits together (7 + 5 = 75)",
+        "- reverse: reversed the digits of the answer (9 + 3 = 21)",
+    ]:
+        assert line in instructions
+
+
+def test_instructions_have_open_tags_when_no_map() -> None:
+    instructions = build_instructions("english", "animals", 3)
+    assert ONLY_THESE_TAGS not in instructions
+    assert "glued the digits together" not in instructions
+    assert "snake_case" in instructions
+
+
+@pytest.mark.parametrize(
+    ("subject", "chapter"), [("math", MAPPED_CHAPTER), ("english", "animals")]
+)
+def test_instructions_ask_for_different_mistakes(subject: str, chapter: str) -> None:
+    assert DIFFERENT_MISTAKES in build_instructions(subject, chapter, 3)
+
+
+def question_with_tags(prompt: str, first_tag: str, second_tag: str) -> dict[str, Any]:
+    question = question_dict(prompt)
+    question["options"][1]["mistake_tag"] = first_tag
+    question["options"][2]["mistake_tag"] = second_tag
+    return question
+
+
+@pytest.mark.parametrize(
+    ("subject", "chapter"),
+    [("math", MAPPED_CHAPTER), ("Math", " Addition and  Subtraction ")],
+)
+def test_question_with_tag_outside_map_is_rejected(subject: str, chapter: str) -> None:
+    reply = reply_with(
+        [
+            question_with_tags("good", "concat", "count"),
+            question_with_tags("bad", "concat", "forgot_to_carry"),
+        ]
+    )
+    model = FakeTextModel(reply)
+    result = generate_questions(model, subject, chapter, MATERIAL, 2)
+    assert [q.prompt for q in result.questions] == ["good"]
+    assert result.rejected == 1
+
+
+def test_any_tag_is_allowed_when_no_map() -> None:
+    reply = reply_with([question_with_tags("free", "forgot_to_carry", "misread")])
+    result = generate(reply, count=1)
+    assert len(result.questions) == 1
+    assert result.rejected == 0
+
+
 # --- Input limits ---------------------------------------------------------------------
 
 
