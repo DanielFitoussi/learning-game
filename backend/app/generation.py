@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+from app.mistake_maps import get_mistake_tags
 from app.questions import MAX_OPTIONS, MIN_OPTIONS, Question
 
 MAX_MATERIAL_CHARS = 20_000
@@ -32,9 +33,30 @@ class GenerationResult:
     rejected: int
 
 
+def _mistake_tag_rules(tags: dict[str, str] | None) -> str:
+    """Instruction lines about mistake tags: a fixed list if the chapter has one."""
+    if tags is None:
+        tag_rule = """- Every wrong option has a "mistake_tag": a snake_case name (lowercase English
+  letters, digits and underscores, starting with a letter) for the misconception
+  that choosing it reveals, for example "concat" or "similar_sound"."""
+    else:
+        allowed = "\n".join(
+            f"  - {tag}: {description}" for tag, description in tags.items()
+        )
+        tag_rule = f"""- Every wrong option has a "mistake_tag" for the misconception that choosing
+  it reveals. Use only these mistake tags:
+{allowed}"""
+    different = (
+        "- In one question, each wrong option must reveal a different mistake"
+        " (a different mistake_tag)."
+    )
+    return f"{tag_rule}\n{different}"
+
+
 def build_instructions(subject: str, chapter: str, count: int) -> str:
     """Build the instructions for the model. The material is sent separately."""
     schema = json.dumps(Question.model_json_schema(), indent=2)
+    tag_rules = _mistake_tag_rules(get_mistake_tags(subject, chapter))
     return f"""You write practice questions for children.
 
 Subject: {subject}
@@ -48,9 +70,7 @@ Write exactly {count} questions of kind "choose_one", based only on the material
 Rules for every question:
 - Give {MIN_OPTIONS} to {MAX_OPTIONS} answer options. Exactly one option is correct.
 - The correct option has "mistake_tag": null and "hint": null.
-- Every wrong option has a "mistake_tag": a snake_case name (lowercase English
-  letters, digits and underscores, starting with a letter) for the misconception
-  that choosing it reveals, for example "concat" or "similar_sound".
+{tag_rules}
 - Every wrong option has a "hint": one short, kind sentence for a child, written
   in the language of the material.
 - Option texts must all be different.
@@ -89,14 +109,35 @@ def _parse_reply(reply: str) -> list[Any]:
     return data["questions"]
 
 
-def _validate_questions(items: list[Any]) -> tuple[list[Question], int]:
-    """Validate each item as a Question. Return the valid ones and the reject count."""
+def _uses_only_allowed_tags(question: Question, allowed: dict[str, str] | None) -> bool:
+    """True if every mistake_tag is in the chapter's map, or the chapter has no map."""
+    if allowed is None:
+        return True
+    return all(
+        option.mistake_tag in allowed
+        for option in question.options
+        if not option.is_correct
+    )
+
+
+def _validate_questions(
+    items: list[Any], allowed_tags: dict[str, str] | None
+) -> tuple[list[Question], int]:
+    """Validate each item as a Question. Return the valid ones and the reject count.
+
+    When the chapter has a mistake map, questions with other tags are rejected.
+    """
     questions: list[Question] = []
     rejected = 0
     for item in items:
         try:
-            questions.append(Question.model_validate(item))
+            question = Question.model_validate(item)
         except ValidationError:
+            rejected += 1
+            continue
+        if _uses_only_allowed_tags(question, allowed_tags):
+            questions.append(question)
+        else:
             rejected += 1
     return questions, rejected
 
@@ -113,7 +154,8 @@ def generate_questions(
     instructions = build_instructions(subject, chapter, count)
     reply = model.complete_json(instructions, material)
 
-    questions, rejected = _validate_questions(_parse_reply(reply))
+    allowed_tags = get_mistake_tags(subject, chapter)
+    questions, rejected = _validate_questions(_parse_reply(reply), allowed_tags)
     if not questions:
         raise GenerationError(f"no valid questions in the reply ({rejected} rejected)")
     return GenerationResult(questions=questions[:count], rejected=rejected)

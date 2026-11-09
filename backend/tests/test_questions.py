@@ -183,6 +183,16 @@ def test_duplicate_option_texts_are_rejected() -> None:
         make_math_question(options=options)
 
 
+def test_wrong_options_with_same_mistake_tag_are_rejected() -> None:
+    options = [
+        correct_option("12"),
+        wrong_option("75", "concat"),
+        wrong_option("57", "concat"),
+    ]
+    with pytest.raises(ValidationError, match="mistake_tag"):
+        make_math_question(options=options)
+
+
 def test_duplicate_check_ignores_case_and_spaces() -> None:
     options = [correct_option("cat"), wrong_option("dog"), wrong_option(" Cat ")]
     with pytest.raises(ValidationError, match="unique"):
