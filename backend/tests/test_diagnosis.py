@@ -1,6 +1,10 @@
 import pytest
 
-from app.diagnosis import MistakeType, classify_answer
+from app.diagnosis import (
+    MistakeType,
+    classify_answer,
+    detect_patterns,
+)
 
 SLOW_MS = 5000  # Well above the guess limit, so "guess" never triggers.
 FAST_MS = 800  # Below the guess limit.
@@ -129,3 +133,55 @@ def test_guess_time_boundary() -> None:
 def test_invalid_input_raises(a: int, b: int, op: str, time_ms: int) -> None:
     with pytest.raises(ValueError):
         classify_answer(a, b, op, 0, time_ms)
+
+
+# --- detect_patterns ------------------------------------------------------------
+
+CORRECT = MistakeType.CORRECT
+GUESS = MistakeType.GUESS
+CONCAT = MistakeType.CONCAT
+OP = MistakeType.OP
+COUNT = MistakeType.COUNT
+REVERSE = MistakeType.REVERSE
+OTHER = MistakeType.OTHER
+
+
+def test_pattern_needs_at_least_2_answers() -> None:
+    # concat appears twice (a pattern), op only once (not a pattern).
+    assert detect_patterns([CONCAT, CONCAT, OP]) == {CONCAT: 2}
+
+
+def test_no_repeats_means_no_patterns() -> None:
+    assert detect_patterns([CONCAT, OP, COUNT]) == {}
+
+
+def test_correct_and_other_are_never_patterns() -> None:
+    results = [CORRECT, CORRECT, CORRECT, OTHER, OTHER, OTHER, COUNT, COUNT]
+    assert detect_patterns(results) == {COUNT: 2}
+
+
+def test_guess_can_be_a_pattern() -> None:
+    assert detect_patterns([GUESS, GUESS]) == {GUESS: 2}
+
+
+def test_patterns_are_sorted_most_common_first() -> None:
+    results = [OP, CONCAT, CONCAT, CONCAT, OP, REVERSE, REVERSE, REVERSE, REVERSE]
+    # A dict compares equal regardless of order, so check the items as a list.
+    assert list(detect_patterns(results).items()) == [
+        (REVERSE, 4),
+        (CONCAT, 3),
+        (OP, 2),
+    ]
+
+
+def test_ties_keep_order_of_first_appearance() -> None:
+    results = [OP, CONCAT, CONCAT, OP]
+    assert list(detect_patterns(results).items()) == [(OP, 2), (CONCAT, 2)]
+
+
+def test_empty_list_has_no_patterns() -> None:
+    assert detect_patterns([]) == {}
+
+
+def test_only_correct_answers_has_no_patterns() -> None:
+    assert detect_patterns([CORRECT] * 5) == {}
