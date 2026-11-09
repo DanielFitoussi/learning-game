@@ -25,6 +25,7 @@ class MistakeType(StrEnum):
 NEVER_PATTERNS = frozenset({MistakeType.CORRECT, MistakeType.OTHER})
 """Result types that are never reported as patterns."""
 
+
 def _calculate(a: int, b: int, op: str) -> int:
     """Return the result of `a op b`."""
     return a + b if op == "+" else a - b
@@ -84,8 +85,6 @@ def classify_answer(a: int, b: int, op: str, answer: int, time_ms: int) -> Mista
     if _is_reversed(correct, answer):
         return MistakeType.REVERSE
     return MistakeType.OTHER
-
-
 
 
 def detect_patterns(results: list[MistakeType]) -> dict[MistakeType, int]:

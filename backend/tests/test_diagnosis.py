@@ -146,9 +146,6 @@ REVERSE = MistakeType.REVERSE
 OTHER = MistakeType.OTHER
 
 
-
-
-
 def test_pattern_needs_at_least_2_answers() -> None:
     # concat appears twice (a pattern), op only once (not a pattern).
     assert detect_patterns([CONCAT, CONCAT, OP]) == {CONCAT: 2}
