@@ -1,11 +1,15 @@
-"""Classify a child's answer to a single + or - exercise into a mistake type."""
+"""Classify a child's answers to + and - exercises and find repeated mistakes."""
 
+from collections import Counter
 from enum import StrEnum
 
 GUESS_LIMIT_MS = 1500
 """A wrong answer given faster than this is treated as a guess."""
 
 OPERATIONS = ("+", "-")
+
+MIN_PATTERN_COUNT = 2
+"""A mistake type must appear at least this many times to be a pattern."""
 
 
 class MistakeType(StrEnum):
@@ -17,6 +21,9 @@ class MistakeType(StrEnum):
     REVERSE = "reverse"
     OTHER = "other"
 
+
+NEVER_PATTERNS = frozenset({MistakeType.CORRECT, MistakeType.OTHER})
+"""Result types that are never reported as patterns."""
 
 def _calculate(a: int, b: int, op: str) -> int:
     """Return the result of `a op b`."""
@@ -77,3 +84,20 @@ def classify_answer(a: int, b: int, op: str, answer: int, time_ms: int) -> Mista
     if _is_reversed(correct, answer):
         return MistakeType.REVERSE
     return MistakeType.OTHER
+
+
+
+
+def detect_patterns(results: list[MistakeType]) -> dict[MistakeType, int]:
+    """Return the mistake types that repeat, with how often each appeared.
+
+    Only types that appear at least MIN_PATTERN_COUNT times are included,
+    and correct/other are always skipped. The result is sorted from most
+    common to least common; ties keep the order of first appearance.
+    """
+    counts = Counter(result for result in results if result not in NEVER_PATTERNS)
+    return {
+        mistake: count
+        for mistake, count in counts.most_common()
+        if count >= MIN_PATTERN_COUNT
+    }
