@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "openai>=3.48.0",
     "pydantic>=2.14.3",
+    "sqlmodel>=0.0.48",
 ]
 
 [dependency-groups]
