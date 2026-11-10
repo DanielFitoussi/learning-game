@@ -43,7 +43,6 @@ def english_question(prompt: str) -> Question:
                     "hint": "A hat is not an animal.",
                 },
             ],
-            "code_checked": False,
         }
     )
 

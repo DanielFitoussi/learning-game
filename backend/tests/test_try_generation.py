@@ -12,13 +12,16 @@ from app.try_generation import format_result, main
 
 
 class FakeTextModel:
-    """A TextModel that always returns the same reply."""
+    """A TextModel that returns the next reply on each call (generate, then review)."""
 
-    def __init__(self, reply: str) -> None:
-        self.reply = reply
+    def __init__(self, *replies: str) -> None:
+        self.replies = list(replies)
 
     def complete_json(self, instructions: str, material: str) -> str:
-        return self.reply
+        return self.replies.pop(0)
+
+
+ALL_OK_REVIEW = json.dumps({"reviews": [{"index": 0, "ok": True, "problem": None}]})
 
 
 def question_dict() -> dict[str, Any]:
@@ -42,8 +45,6 @@ def question_dict() -> dict[str, Any]:
                 "hint": "ספרו שוב לאט ובזהירות.",
             },
         ],
-        "code_checked": True,
-        "exercise": {"a": 7, "op": "+", "b": 5},
     }
 
 
@@ -104,7 +105,7 @@ def test_main_prints_result_and_writes_out_file(
     material_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out_file = tmp_path / "out.txt"
-    model = FakeTextModel(json.dumps({"questions": [question_dict()]}))
+    model = FakeTextModel(json.dumps({"questions": [question_dict()]}), ALL_OK_REVIEW)
 
     code = main(
         [str(material_file), "math", "addition", "1", "--out", str(out_file)],

@@ -11,8 +11,6 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.math_check import check_math
-from app.mistake_maps import get_mistake_tags
 from app.questions import MAX_OPTIONS, MIN_OPTIONS, Question
 from app.review import review_questions
 from app.text_model import TextModel
@@ -45,7 +43,7 @@ class GenerationResult:
 
 
 def _mistake_tag_rules(tags: dict[str, str] | None) -> str:
-    """Instruction lines about mistake tags: a fixed list if the chapter has one."""
+    """Instruction lines about mistake tags: a fixed list if a map is given."""
     if tags is None:
         tag_rule = """- Every wrong option has a "mistake_tag": a snake_case name (lowercase English
   letters, digits and underscores, starting with a letter) for the misconception
@@ -64,10 +62,19 @@ def _mistake_tag_rules(tags: dict[str, str] | None) -> str:
     return f"{tag_rule}\n{different}"
 
 
-def build_instructions(subject: str, chapter: str, count: int) -> str:
-    """Build the instructions for the model. The material is sent separately."""
+def build_instructions(
+    subject: str,
+    chapter: str,
+    count: int,
+    mistake_tags: dict[str, str] | None = None,
+) -> str:
+    """Build the instructions for the model. The material is sent separately.
+
+    With `mistake_tags` ({tag: description}), the model may use only those tags.
+    Without it, the model picks its own snake_case tags.
+    """
     schema = json.dumps(Question.model_json_schema(), indent=2)
-    tag_rules = _mistake_tag_rules(get_mistake_tags(subject, chapter))
+    tag_rules = _mistake_tag_rules(mistake_tags)
     return f"""You write practice questions for children.
 
 Subject: {subject}
@@ -94,9 +101,6 @@ Rules for every question:
   same question never have the same hint. A hint never gives away the correct answer.
 - Option texts must all be different.
 - Set "subject" to "{subject}" and "chapter" to "{chapter}".
-- Set "code_checked" to true if the subject is math, otherwise false.
-- For math, set "exercise" to the calculation the question asks about, as
-  {{"a": <number>, "op": "+" or "-", "b": <number>}}. Otherwise set it to null.
 
 Answer with JSON only, no other text, in this shape:
 {{"questions": [ ... ]}}
@@ -130,12 +134,14 @@ def _parse_reply(reply: str) -> list[Any]:
     return data["questions"]
 
 
-def _uses_only_allowed_tags(question: Question, allowed: dict[str, str] | None) -> bool:
-    """True if every mistake_tag is in the chapter's map, or the chapter has no map."""
-    if allowed is None:
+def _uses_only_allowed_tags(
+    question: Question, mistake_tags: dict[str, str] | None
+) -> bool:
+    """True if every mistake_tag is in the map, or there is no map."""
+    if mistake_tags is None:
         return True
     return all(
-        option.mistake_tag in allowed
+        option.mistake_tag in mistake_tags
         for option in question.options
         if not option.is_correct
     )
@@ -156,11 +162,12 @@ def _is_in_hebrew(question: Question) -> bool:
 
 
 def _validate_questions(
-    items: list[Any], allowed_tags: dict[str, str] | None
+    items: list[Any], mistake_tags: dict[str, str] | None
 ) -> tuple[list[Question], int]:
     """Validate each item as a Question. Return the valid ones and the reject count.
 
-    When the chapter has a mistake map, questions with other tags are rejected.
+    A question is also rejected if its prompt or a hint has no Hebrew letter,
+    or, when a mistake map is given, if it uses a tag outside the map.
     """
     questions: list[Question] = []
     rejected = 0
@@ -170,30 +177,17 @@ def _validate_questions(
         except ValidationError:
             rejected += 1
             continue
-        if (
-            _is_in_hebrew(question)
-            and _uses_only_allowed_tags(question, allowed_tags)
-            and not check_math(question)
-        ):
+        if _is_in_hebrew(question) and _uses_only_allowed_tags(question, mistake_tags):
             questions.append(question)
         else:
             rejected += 1
     return questions, rejected
 
 
-def _review_unchecked(model: TextModel, questions: list[Question]) -> list[Question]:
-    """Keep questions with an exercise, and the others only if the review says ok.
-
-    Questions with an exercise were already checked by code. The model is
-    called only when there is at least one question to review.
-    """
-    unchecked = [question for question in questions if question.exercise is None]
-    verdicts = iter(review_questions(model, unchecked))
-    return [
-        question
-        for question in questions
-        if question.exercise is not None or next(verdicts)
-    ]
+def _keep_reviewed(model: TextModel, questions: list[Question]) -> list[Question]:
+    """Review every question in one call and keep only those the reviewer accepts."""
+    verdicts = review_questions(model, questions)
+    return [question for question, ok in zip(questions, verdicts, strict=True) if ok]
 
 
 def generate_questions(
@@ -201,18 +195,20 @@ def generate_questions(
 ) -> GenerationResult:
     """Ask the model for `count` questions about the material and validate them.
 
-    Invalid questions are skipped and counted in `rejected`. Questions without
-    an exercise are reviewed by a second model call; those that fail are also
-    counted in `review_rejected`. If more valid questions remain than asked
-    for, only the first `count` are kept.
+    Invalid questions are skipped and counted in `rejected`. Every valid
+    question is then reviewed by a second model call; those that fail are also
+    counted in `review_rejected`. If more questions remain than asked for, only
+    the first `count` are kept.
+
+    No mistake map is used yet, so the model picks its own tags.
     """
     _check_inputs(material, count)
-    instructions = build_instructions(subject, chapter, count)
+    mistake_tags = None
+    instructions = build_instructions(subject, chapter, count, mistake_tags)
     reply = model.complete_json(instructions, material)
 
-    allowed_tags = get_mistake_tags(subject, chapter)
-    validated, rejected = _validate_questions(_parse_reply(reply), allowed_tags)
-    questions = _review_unchecked(model, validated)
+    validated, rejected = _validate_questions(_parse_reply(reply), mistake_tags)
+    questions = _keep_reviewed(model, validated)
     review_rejected = len(validated) - len(questions)
     rejected += review_rejected
     if not questions:

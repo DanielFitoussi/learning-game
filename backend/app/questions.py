@@ -38,16 +38,6 @@ class AnswerOption(BaseModel):
         return self
 
 
-class Exercise(BaseModel):
-    """The calculation behind a math question, so code can check the answers."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    a: int = Field(ge=0)
-    op: Literal["+", "-"]
-    b: int = Field(ge=0)
-
-
 class Question(BaseModel):
     """A generated question with its answer options."""
 
@@ -58,15 +48,6 @@ class Question(BaseModel):
     chapter: NonEmptyStr
     prompt: NonEmptyStr
     options: list[AnswerOption] = Field(min_length=MIN_OPTIONS, max_length=MAX_OPTIONS)
-    code_checked: bool
-    exercise: Exercise | None = None
-
-    @model_validator(mode="after")
-    def check_exercise(self) -> Self:
-        """A question that our code checks needs an exercise to check against."""
-        if self.code_checked and self.exercise is None:
-            raise ValueError("a code_checked question must have an exercise")
-        return self
 
     @model_validator(mode="after")
     def check_options(self) -> Self:
