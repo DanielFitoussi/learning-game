@@ -19,17 +19,30 @@ MATERIAL = "When we add 7 and 5 we get 12. Adding means putting groups together.
 
 
 class FakeTextModel:
-    """A TextModel that returns a fixed reply and records what it received."""
+    """A TextModel that returns the next reply on each call and records the calls.
 
-    def __init__(self, reply: str) -> None:
-        self.reply = reply
-        self.instructions: str | None = None
-        self.material: str | None = None
+    A call with no reply left fails the test, so an unexpected extra call
+    (for example an unwanted review) is caught.
+    """
+
+    def __init__(self, *replies: str) -> None:
+        self.replies = list(replies)
+        self.calls: list[tuple[str, str]] = []
 
     def complete_json(self, instructions: str, material: str) -> str:
-        self.instructions = instructions
-        self.material = material
-        return self.reply
+        self.calls.append((instructions, material))
+        assert len(self.calls) <= len(self.replies), "unexpected extra model call"
+        return self.replies[len(self.calls) - 1]
+
+    @property
+    def instructions(self) -> str:
+        """The instructions of the first call (the generation call)."""
+        return self.calls[0][0]
+
+    @property
+    def material(self) -> str:
+        """The material of the first call (the generation call)."""
+        return self.calls[0][1]
 
 
 def question_dict(prompt: str = "7 + 5 = ?") -> dict[str, Any]:
@@ -77,6 +90,15 @@ def broken_question_dict() -> dict[str, Any]:
 
 def reply_with(questions: list[Any]) -> str:
     return json.dumps({"questions": questions})
+
+
+def review_reply(*oks: bool) -> str:
+    """A review reply with one verdict per reviewed question, in order."""
+    reviews = [
+        {"index": i, "ok": ok, "problem": None if ok else "Not clear."}
+        for i, ok in enumerate(oks)
+    ]
+    return json.dumps({"reviews": reviews})
 
 
 def generate(reply: str, count: int = 2, material: str = MATERIAL) -> Any:
@@ -147,7 +169,6 @@ def test_material_reaches_model_unchanged_and_not_in_instructions() -> None:
     model = FakeTextModel(reply_with([question_dict()]))
     generate_questions(model, "math", "addition", MATERIAL, 1)
     assert model.material == MATERIAL
-    assert model.instructions is not None
     assert MATERIAL not in model.instructions
 
 
@@ -227,9 +248,64 @@ def test_question_with_tag_outside_map_is_rejected(subject: str, chapter: str) -
 
 def test_any_tag_is_allowed_when_no_map() -> None:
     question = unchecked(question_with_tags("free", "forgot_to_carry", "misread"))
-    result = generate(reply_with([question]), count=1)
+    model = FakeTextModel(reply_with([question]), review_reply(True))
+    result = generate_questions(model, "math", "addition", MATERIAL, 1)
     assert len(result.questions) == 1
     assert result.rejected == 0
+
+
+# --- Review of questions without an exercise --------------------------------------------
+
+
+def test_math_only_questions_are_not_reviewed() -> None:
+    model = FakeTextModel(reply_with([question_dict("a"), question_dict("b")]))
+    result = generate_questions(model, "math", "addition", MATERIAL, 2)
+    assert len(model.calls) == 1
+    assert result.review_rejected == 0
+
+
+def test_question_rejected_by_review_is_rejected_and_counted() -> None:
+    reply = reply_with(
+        [unchecked(question_dict("good")), unchecked(question_dict("bad"))]
+    )
+    model = FakeTextModel(reply, review_reply(True, False))
+    result = generate_questions(model, "math", "addition", MATERIAL, 2)
+    assert [q.prompt for q in result.questions] == ["good"]
+    assert result.review_rejected == 1
+    assert result.rejected == 1
+
+
+def test_only_questions_without_exercise_are_reviewed() -> None:
+    reply = reply_with(
+        [
+            question_dict("math"),
+            unchecked(question_dict("words")),
+            question_dict("more"),
+        ]
+    )
+    model = FakeTextModel(reply, review_reply(True))
+    result = generate_questions(model, "math", "addition", MATERIAL, 3)
+
+    assert len(model.calls) == 2
+    reviewed = json.loads(model.calls[1][1])["questions"]
+    assert [item["prompt"] for item in reviewed] == ["words"]
+    # Order of the questions is kept.
+    assert [q.prompt for q in result.questions] == ["math", "words", "more"]
+
+
+def test_review_happens_before_cutting_to_count() -> None:
+    # The first question fails the review, so the extra one fills its place.
+    reply = reply_with([unchecked(question_dict("bad")), question_dict("extra")])
+    model = FakeTextModel(reply, review_reply(False))
+    result = generate_questions(model, "math", "addition", MATERIAL, 1)
+    assert [q.prompt for q in result.questions] == ["extra"]
+
+
+def test_all_rejected_by_review_raises() -> None:
+    reply = reply_with([unchecked(question_dict("bad"))])
+    model = FakeTextModel(reply, review_reply(False))
+    with pytest.raises(GenerationError):
+        generate_questions(model, "math", "addition", MATERIAL, 1)
 
 
 # --- Math check --------------------------------------------------------------------------

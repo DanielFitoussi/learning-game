@@ -6,22 +6,28 @@ that matches the TextModel protocol (see app/llm.py for the real one).
 
 import json
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 from pydantic import ValidationError
 
 from app.math_check import check_math
 from app.mistake_maps import get_mistake_tags
 from app.questions import MAX_OPTIONS, MIN_OPTIONS, Question
+from app.review import review_questions
+from app.text_model import TextModel
+
+__all__ = [
+    "MAX_MATERIAL_CHARS",
+    "MAX_QUESTIONS",
+    "GenerationError",
+    "GenerationResult",
+    "TextModel",
+    "build_instructions",
+    "generate_questions",
+]
 
 MAX_MATERIAL_CHARS = 20_000
 MAX_QUESTIONS = 10
-
-
-class TextModel(Protocol):
-    """A language model that answers with a JSON string."""
-
-    def complete_json(self, instructions: str, material: str) -> str: ...
 
 
 class GenerationError(Exception):
@@ -32,6 +38,9 @@ class GenerationError(Exception):
 class GenerationResult:
     questions: list[Question]
     rejected: int
+    """All rejected questions, including those rejected by the review."""
+    review_rejected: int = 0
+    """Questions rejected by the second-model review."""
 
 
 def _mistake_tag_rules(tags: dict[str, str] | None) -> str:
@@ -146,20 +155,44 @@ def _validate_questions(
     return questions, rejected
 
 
+def _review_unchecked(model: TextModel, questions: list[Question]) -> list[Question]:
+    """Keep questions with an exercise, and the others only if the review says ok.
+
+    Questions with an exercise were already checked by code. The model is
+    called only when there is at least one question to review.
+    """
+    unchecked = [question for question in questions if question.exercise is None]
+    verdicts = iter(review_questions(model, unchecked))
+    return [
+        question
+        for question in questions
+        if question.exercise is not None or next(verdicts)
+    ]
+
+
 def generate_questions(
     model: TextModel, subject: str, chapter: str, material: str, count: int
 ) -> GenerationResult:
     """Ask the model for `count` questions about the material and validate them.
 
-    Invalid questions are skipped and counted in `rejected`. If the model
-    returns more valid questions than asked for, only the first `count` are kept.
+    Invalid questions are skipped and counted in `rejected`. Questions without
+    an exercise are reviewed by a second model call; those that fail are also
+    counted in `review_rejected`. If more valid questions remain than asked
+    for, only the first `count` are kept.
     """
     _check_inputs(material, count)
     instructions = build_instructions(subject, chapter, count)
     reply = model.complete_json(instructions, material)
 
     allowed_tags = get_mistake_tags(subject, chapter)
-    questions, rejected = _validate_questions(_parse_reply(reply), allowed_tags)
+    validated, rejected = _validate_questions(_parse_reply(reply), allowed_tags)
+    questions = _review_unchecked(model, validated)
+    review_rejected = len(validated) - len(questions)
+    rejected += review_rejected
     if not questions:
         raise GenerationError(f"no valid questions in the reply ({rejected} rejected)")
-    return GenerationResult(questions=questions[:count], rejected=rejected)
+    return GenerationResult(
+        questions=questions[:count],
+        rejected=rejected,
+        review_rejected=review_rejected,
+    )
