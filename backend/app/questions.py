@@ -70,7 +70,7 @@ class Question(BaseModel):
 
     @model_validator(mode="after")
     def check_options(self) -> Self:
-        """One correct option, unique texts, and a different tag per wrong option."""
+        """One correct option, unique texts, and a different tag and hint per wrong option."""
         correct_count = sum(option.is_correct for option in self.options)
         if correct_count != 1:
             raise ValueError(f"exactly one option must be correct, got {correct_count}")
@@ -82,4 +82,12 @@ class Question(BaseModel):
         tags = [option.mistake_tag for option in self.options if not option.is_correct]
         if len(tags) != len(set(tags)):
             raise ValueError("wrong options must have different mistake_tags")
+
+        hints = [
+            (option.hint or "").casefold()
+            for option in self.options
+            if not option.is_correct
+        ]
+        if len(hints) != len(set(hints)):
+            raise ValueError("wrong options must have different hints (ignoring case)")
         return self

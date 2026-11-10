@@ -12,7 +12,9 @@ def option(text: str, tag: str | None = None) -> dict[str, Any]:
     """A correct option when tag is None, otherwise a wrong option with a hint."""
     if tag is None:
         return {"text": text, "is_correct": True, "mistake_tag": None, "hint": None}
-    return {"text": text, "is_correct": False, "mistake_tag": tag, "hint": "Try again."}
+    # Each wrong option gets its own hint, because hints must be unique.
+    hint = f"A hint about {text}."
+    return {"text": text, "is_correct": False, "mistake_tag": tag, "hint": hint}
 
 
 def make_question(

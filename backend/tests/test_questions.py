@@ -12,11 +12,18 @@ def correct_option(text: str = "12") -> dict[str, Any]:
     return {"text": text, "is_correct": True, "mistake_tag": None, "hint": None}
 
 
+AUTO_HINT = "<auto>"
+"""Marker: give the option its own hint, based on its text."""
+
+
 def wrong_option(
     text: str,
     mistake_tag: str | None = "concat",
-    hint: str | None = "Add the numbers, do not glue them.",
+    hint: str | None = AUTO_HINT,
 ) -> dict[str, Any]:
+    # Hints must be unique per question, so the default hint uses the text.
+    if hint == AUTO_HINT:
+        hint = f"A hint about {text}."
     return {
         "text": text,
         "is_correct": False,
@@ -231,6 +238,25 @@ def test_wrong_options_with_same_mistake_tag_are_rejected() -> None:
         wrong_option("57", "concat"),
     ]
     with pytest.raises(ValidationError, match="mistake_tag"):
+        make_math_question(options=options)
+
+
+@pytest.mark.parametrize(
+    ("first_hint", "second_hint"),
+    [
+        ("Count again.", "Count again."),
+        ("Count again.", "  count AGAIN. "),
+    ],
+)
+def test_wrong_options_with_same_hint_are_rejected(
+    first_hint: str, second_hint: str
+) -> None:
+    options = [
+        correct_option("12"),
+        wrong_option("75", "concat", first_hint),
+        wrong_option("11", "count", second_hint),
+    ]
+    with pytest.raises(ValidationError, match="hints"):
         make_math_question(options=options)
 
 

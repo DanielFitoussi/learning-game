@@ -43,8 +43,9 @@ For each question, check that:
 2. No other option is also correct.
 3. The question is clear for a child.
 4. The question fits its subject and chapter.
+5. Each hint fits the mistake of its option and does not give away the answer.
 
-A question is ok only if all four checks pass. If not, describe the problem in
+A question is ok only if all five checks pass. If not, describe the problem in
 one short English sentence.
 
 Answer with JSON only, no other text, in this shape:

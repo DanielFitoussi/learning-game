@@ -135,6 +135,9 @@ def test_review_instructions_cover_the_checks() -> None:
         "no other option is also correct",
         "clear for a child",
         "subject and chapter",
+        "hint fits the mistake of its option",
+        "does not give away the answer",
+        "all five checks",
         "json",
     ]:
         assert phrase in instructions

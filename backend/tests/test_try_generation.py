@@ -26,20 +26,20 @@ def question_dict() -> dict[str, Any]:
         "kind": "choose_one",
         "subject": "math",
         "chapter": "addition",
-        "prompt": "7 + 5 = ?",
+        "prompt": "כמה זה 7 + 5?",
         "options": [
             {"text": "12", "is_correct": True, "mistake_tag": None, "hint": None},
             {
                 "text": "75",
                 "is_correct": False,
                 "mistake_tag": "concat",
-                "hint": "Add the numbers, do not glue them.",
+                "hint": "חברו את המספרים, אל תדביקו אותם.",
             },
             {
                 "text": "11",
                 "is_correct": False,
                 "mistake_tag": "count",
-                "hint": "Count again carefully.",
+                "hint": "ספרו שוב לאט ובזהירות.",
             },
         ],
         "code_checked": True,
@@ -71,7 +71,7 @@ def material_file(tmp_path: Path) -> Path:
 
 def test_format_result_shows_prompt_and_marks_correct_option() -> None:
     text = format_result(make_result())
-    assert "7 + 5 = ?" in text
+    assert "כמה זה 7 + 5?" in text
     assert "✓" in line_containing(text, "12")
     assert "✓" not in line_containing(text, "75")
 
@@ -80,10 +80,10 @@ def test_format_result_shows_tag_and_hint_for_wrong_options() -> None:
     text = format_result(make_result())
     concat_line = line_containing(text, "75")
     assert "concat" in concat_line
-    assert "Add the numbers, do not glue them." in concat_line
+    assert "חברו את המספרים, אל תדביקו אותם." in concat_line
     count_line = line_containing(text, "11")
     assert "count" in count_line
-    assert "Count again carefully." in count_line
+    assert "ספרו שוב לאט ובזהירות." in count_line
 
 
 def test_format_result_shows_returned_and_rejected_counts() -> None:

@@ -45,30 +45,44 @@ class FakeTextModel:
         return self.calls[0][1]
 
 
-def question_dict(prompt: str = "7 + 5 = ?") -> dict[str, Any]:
+HEBREW_PROMPT = "כמה זה 7 + 5?"
+NAME_SEPARATOR = ": "
+
+
+def question_dict(name: str = "q") -> dict[str, Any]:
+    """A valid math question. The name lets tests tell questions apart."""
     return {
         "kind": "choose_one",
         "subject": "math",
         "chapter": "addition",
-        "prompt": prompt,
+        "prompt": f"{name}{NAME_SEPARATOR}{HEBREW_PROMPT}",
         "options": [
             {"text": "12", "is_correct": True, "mistake_tag": None, "hint": None},
             {
                 "text": "75",
                 "is_correct": False,
                 "mistake_tag": "concat",
-                "hint": "Add the numbers, do not glue them.",
+                "hint": "חברו את המספרים, אל תדביקו אותם.",
             },
             {
                 "text": "11",
                 "is_correct": False,
                 "mistake_tag": "count",
-                "hint": "Count again carefully.",
+                "hint": "ספרו שוב לאט ובזהירות.",
             },
         ],
         "code_checked": True,
         "exercise": {"a": 7, "op": "+", "b": 5},
     }
+
+
+def name_of(prompt: str) -> str:
+    """The name that question_dict put at the start of the prompt."""
+    return prompt.split(NAME_SEPARATOR)[0]
+
+
+def names(result: Any) -> list[str]:
+    return [name_of(question.prompt) for question in result.questions]
 
 
 def unchecked(question: dict[str, Any]) -> dict[str, Any]:
@@ -110,9 +124,9 @@ def generate(reply: str, count: int = 2, material: str = MATERIAL) -> Any:
 
 
 def test_valid_reply_returns_all_questions() -> None:
-    reply = reply_with([question_dict("7 + 5 = ?"), question_dict("6 + 6 = ?")])
+    reply = reply_with([question_dict("a"), question_dict("b")])
     result = generate(reply)
-    assert [q.prompt for q in result.questions] == ["7 + 5 = ?", "6 + 6 = ?"]
+    assert names(result) == ["a", "b"]
     assert result.rejected == 0
 
 
@@ -132,7 +146,7 @@ def test_item_that_is_not_an_object_is_rejected() -> None:
 def test_extra_valid_questions_are_cut_to_count() -> None:
     reply = reply_with([question_dict("a"), question_dict("b"), question_dict("c")])
     result = generate(reply, count=2)
-    assert [q.prompt for q in result.questions] == ["a", "b"]
+    assert names(result) == ["a", "b"]
     assert result.rejected == 0
 
 
@@ -186,6 +200,95 @@ def test_instructions_ask_for_json() -> None:
 
 def test_instructions_ask_for_plural_hints() -> None:
     assert "plural" in build_instructions("math", "addition", 3)
+
+
+# --- Language and hints ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("subject", "chapter"), [("math", "addition"), ("english", "animals")]
+)
+def test_instructions_ask_for_hebrew_prompt_and_hints(
+    subject: str, chapter: str
+) -> None:
+    instructions = build_instructions(subject, chapter, 3)
+    assert "prompt and every hint in Hebrew" in instructions
+    assert "grades 1-3 in Israel" in instructions
+
+
+def test_instructions_keep_options_in_the_taught_language() -> None:
+    instructions = build_instructions("english", "animals", 3)
+    assert "options in the language being taught" in instructions
+    assert "English words or sentences" in instructions
+    assert "in the language of the material" not in instructions
+
+
+def test_instructions_set_hint_rules() -> None:
+    instructions = build_instructions("english", "animals", 3)
+    for phrase in [
+        "speaks about the mistake of its own option",
+        "never have the same hint",
+        "never gives away the correct answer",
+    ]:
+        assert phrase in instructions
+
+
+def with_prompt(question: dict[str, Any], prompt: str) -> dict[str, Any]:
+    return question | {"prompt": prompt}
+
+
+def with_hint(question: dict[str, Any], option: int, hint: str) -> dict[str, Any]:
+    question["options"][option]["hint"] = hint
+    return question
+
+
+@pytest.mark.parametrize(
+    "not_hebrew",
+    [
+        with_prompt(question_dict("x"), "What is 7 + 5?"),
+        with_prompt(question_dict("x"), "7 + 5 = ?"),
+        with_hint(question_dict("x"), 2, "Count again carefully."),
+    ],
+)
+def test_question_without_hebrew_prompt_or_hint_is_rejected(
+    not_hebrew: dict[str, Any],
+) -> None:
+    result = generate(reply_with([question_dict("good"), not_hebrew]))
+    assert names(result) == ["good"]
+    assert result.rejected == 1
+
+
+def test_english_options_with_hebrew_prompt_and_hints_are_kept() -> None:
+    question = {
+        "kind": "choose_one",
+        "subject": "english",
+        "chapter": "animals",
+        "prompt": "איזו חיה אומרת 'מיאו'?",
+        "options": [
+            {"text": "cat", "is_correct": True, "mistake_tag": None, "hint": None},
+            {
+                "text": "dog",
+                "is_correct": False,
+                "mistake_tag": "similar_meaning",
+                "hint": "כלב נובח. איזו חיה מייללת?",
+            },
+            {
+                "text": "hat",
+                "is_correct": False,
+                "mistake_tag": "similar_sound",
+                "hint": "המילה נשמעת דומה, אבל היא לא חיה.",
+            },
+        ],
+        "code_checked": False,
+        "exercise": None,
+    }
+    model = FakeTextModel(reply_with([question]), review_reply(True))
+    result = generate_questions(model, "english", "animals", MATERIAL, 1)
+    assert [option.text for option in result.questions[0].options] == [
+        "cat",
+        "dog",
+        "hat",
+    ]
 
 
 # --- Mistake maps -----------------------------------------------------------------------
@@ -242,7 +345,7 @@ def test_question_with_tag_outside_map_is_rejected(subject: str, chapter: str) -
     )
     model = FakeTextModel(reply)
     result = generate_questions(model, subject, chapter, MATERIAL, 2)
-    assert [q.prompt for q in result.questions] == ["good"]
+    assert names(result) == ["good"]
     assert result.rejected == 1
 
 
@@ -270,7 +373,7 @@ def test_question_rejected_by_review_is_rejected_and_counted() -> None:
     )
     model = FakeTextModel(reply, review_reply(True, False))
     result = generate_questions(model, "math", "addition", MATERIAL, 2)
-    assert [q.prompt for q in result.questions] == ["good"]
+    assert names(result) == ["good"]
     assert result.review_rejected == 1
     assert result.rejected == 1
 
@@ -288,9 +391,9 @@ def test_only_questions_without_exercise_are_reviewed() -> None:
 
     assert len(model.calls) == 2
     reviewed = json.loads(model.calls[1][1])["questions"]
-    assert [item["prompt"] for item in reviewed] == ["words"]
+    assert [name_of(item["prompt"]) for item in reviewed] == ["words"]
     # Order of the questions is kept.
-    assert [q.prompt for q in result.questions] == ["math", "words", "more"]
+    assert names(result) == ["math", "words", "more"]
 
 
 def test_review_happens_before_cutting_to_count() -> None:
@@ -298,7 +401,7 @@ def test_review_happens_before_cutting_to_count() -> None:
     reply = reply_with([unchecked(question_dict("bad")), question_dict("extra")])
     model = FakeTextModel(reply, review_reply(False))
     result = generate_questions(model, "math", "addition", MATERIAL, 1)
-    assert [q.prompt for q in result.questions] == ["extra"]
+    assert names(result) == ["extra"]
 
 
 def test_all_rejected_by_review_raises() -> None:
@@ -320,7 +423,7 @@ def test_math_question_that_fails_check_is_rejected() -> None:
     wrong_answer["options"][0]["text"] = "13"  # 7 + 5 is not 13
     reply = reply_with([question_dict("good"), wrong_answer])
     result = generate(reply)
-    assert [q.prompt for q in result.questions] == ["good"]
+    assert names(result) == ["good"]
     assert result.rejected == 1
 
 
@@ -330,7 +433,7 @@ def test_math_question_with_wrong_tag_is_rejected() -> None:
         [question_dict("good"), question_with_tags("swapped", "count", "concat")]
     )
     result = generate(reply)
-    assert [q.prompt for q in result.questions] == ["good"]
+    assert names(result) == ["good"]
     assert result.rejected == 1
 
 
