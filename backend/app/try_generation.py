@@ -13,6 +13,7 @@ from pathlib import Path
 from app.generation import (
     GenerationError,
     GenerationResult,
+    ReviewRejection,
     TextModel,
     generate_questions,
 )
@@ -24,10 +25,10 @@ WRONG_MARK = "✗"
 
 
 def _format_option(option: AnswerOption) -> str:
-    """One option line: a check mark for the correct one, tag and hint for wrong ones."""
+    """One option line, with a check mark for the correct one."""
     if option.is_correct:
         return f"   {CORRECT_MARK} {option.text}"
-    return f"   {WRONG_MARK} {option.text}  [{option.mistake_tag}] {option.hint}"
+    return f"   {WRONG_MARK} {option.text}"
 
 
 def _format_question(number: int, question: Question) -> str:
@@ -37,12 +38,24 @@ def _format_question(number: int, question: Question) -> str:
     return "\n".join(lines)
 
 
+def _format_review_rejections(rejections: list[ReviewRejection]) -> str:
+    """Each question the review rejected: its prompt and the problem."""
+    lines = ["Rejected by the review:"]
+    lines += [f"  - {item.question.prompt}: {item.problem}" for item in rejections]
+    return "\n".join(lines)
+
+
 def format_result(result: GenerationResult) -> str:
-    """Readable text for all questions, with a summary line at the end."""
+    """The questions, the review rejections, then a summary line.
+
+    The review section is left out when the review rejected nothing.
+    """
     blocks = [
         _format_question(number, question)
         for number, question in enumerate(result.questions, start=1)
     ]
+    if result.review_rejections:
+        blocks.append(_format_review_rejections(result.review_rejections))
     summary = (
         f"Returned {len(result.questions)} questions, rejected {result.rejected}"
         f" ({result.review_rejected} by the review)."

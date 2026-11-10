@@ -1,19 +1,26 @@
-"""Review questions that code cannot check, with a second model call.
+"""Review generated questions with a second model call.
 
 Fail closed: if the reply is not valid, or a question has no review,
 that question counts as not ok.
 """
 
 import json
+from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.questions import Question
 from app.text_model import TextModel
 
+NO_VALID_REVIEW = "no valid review"
+"""Problem text when the reply was not valid or the question had no review."""
+
+NO_REASON = "rejected without a reason"
+"""Problem text when the reviewer said not ok but gave no problem."""
+
 
 class Review(BaseModel):
-    """The reviewer's verdict on one question."""
+    """The reviewer's verdict on one question, as sent by the model."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -28,6 +35,14 @@ class ReviewReply(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reviews: list[Review]
+
+
+@dataclass(frozen=True)
+class ReviewVerdict:
+    """The result for one question: ok, or not ok with a problem text."""
+
+    ok: bool
+    problem: str | None
 
 
 def build_review_instructions() -> str:
@@ -70,21 +85,32 @@ def _parse_reviews(reply: str) -> list[Review]:
         return []
 
 
-def _verdicts(reviews: list[Review], count: int) -> list[bool]:
-    """ok for each question: it has at least one review, and all of them say ok.
+def _combine(previous: ReviewVerdict | None, review: Review) -> ReviewVerdict:
+    """Add one review to a question's verdict. The first problem found is kept."""
+    if previous is not None and not previous.ok:
+        return previous
+    if review.ok:
+        return ReviewVerdict(ok=True, problem=None)
+    return ReviewVerdict(ok=False, problem=review.problem or NO_REASON)
+
+
+def _verdicts(reviews: list[Review], count: int) -> list[ReviewVerdict]:
+    """A verdict for each question: ok only if it has reviews and all say ok.
 
     Reviews with an index outside 0..count-1 are ignored.
     """
-    verdicts: list[bool | None] = [None] * count
+    verdicts: list[ReviewVerdict | None] = [None] * count
     for review in reviews:
         if 0 <= review.index < count:
-            previous = verdicts[review.index]
-            verdicts[review.index] = review.ok and previous is not False
-    return [verdict is True for verdict in verdicts]
+            verdicts[review.index] = _combine(verdicts[review.index], review)
+    missing = ReviewVerdict(ok=False, problem=NO_VALID_REVIEW)
+    return [verdict or missing for verdict in verdicts]
 
 
-def review_questions(model: TextModel, questions: list[Question]) -> list[bool]:
-    """Review all questions in one model call. Return ok/not ok in the same order."""
+def review_questions(
+    model: TextModel, questions: list[Question]
+) -> list[ReviewVerdict]:
+    """Review all questions in one model call. Return a verdict for each, in order."""
     if not questions:
         return []
     reply = model.complete_json(

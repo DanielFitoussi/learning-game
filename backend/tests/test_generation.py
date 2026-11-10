@@ -22,7 +22,7 @@ class FakeTextModel:
     """A TextModel that returns the next reply on each call and records the calls.
 
     A call with no reply left fails the test, so an unexpected extra call
-    (for example an unwanted review) is caught.
+    is caught.
     """
 
     def __init__(self, *replies: str) -> None:
@@ -36,55 +36,47 @@ class FakeTextModel:
 
     @property
     def instructions(self) -> str:
-        """The instructions of the first call (the generation call)."""
+        """The instructions of the first call (the question call)."""
         return self.calls[0][0]
 
     @property
     def material(self) -> str:
-        """The material of the first call (the generation call)."""
+        """The material of the first call (the question call)."""
         return self.calls[0][1]
 
 
-def question_dict(prompt: str = "7 + 5 = ?") -> dict[str, Any]:
+HEBREW_PROMPT = "כמה זה 7 + 5?"
+NAME_SEPARATOR = ": "
+
+
+def question_dict(name: str = "q") -> dict[str, Any]:
+    """A valid math question. The name lets tests tell questions apart."""
     return {
         "kind": "choose_one",
         "subject": "math",
         "chapter": "addition",
-        "prompt": prompt,
+        "prompt": f"{name}{NAME_SEPARATOR}{HEBREW_PROMPT}",
         "options": [
-            {"text": "12", "is_correct": True, "mistake_tag": None, "hint": None},
-            {
-                "text": "75",
-                "is_correct": False,
-                "mistake_tag": "concat",
-                "hint": "Add the numbers, do not glue them.",
-            },
-            {
-                "text": "11",
-                "is_correct": False,
-                "mistake_tag": "count",
-                "hint": "Count again carefully.",
-            },
+            {"text": "12", "is_correct": True},
+            {"text": "75", "is_correct": False},
+            {"text": "11", "is_correct": False},
         ],
-        "code_checked": True,
-        "exercise": {"a": 7, "op": "+", "b": 5},
     }
 
 
-def unchecked(question: dict[str, Any]) -> dict[str, Any]:
-    """The same question without a math check, so only other rules apply."""
-    return question | {"code_checked": False, "exercise": None}
+def name_of(prompt: str) -> str:
+    """The name that question_dict put at the start of the prompt."""
+    return prompt.split(NAME_SEPARATOR)[0]
+
+
+def names(result: Any) -> list[str]:
+    return [name_of(question.prompt) for question in result.questions]
 
 
 def broken_question_dict() -> dict[str, Any]:
     """A question with two correct options."""
     question = question_dict("broken")
-    question["options"][1] = {
-        "text": "75",
-        "is_correct": True,
-        "mistake_tag": None,
-        "hint": None,
-    }
+    question["options"][1] = {"text": "75", "is_correct": True}
     return question
 
 
@@ -101,8 +93,13 @@ def review_reply(*oks: bool) -> str:
     return json.dumps({"reviews": reviews})
 
 
+ALL_OK_REVIEW = review_reply(*[True] * 20)
+"""More "ok" reviews than any test needs. Extra indexes are ignored by the review."""
+
+
 def generate(reply: str, count: int = 2, material: str = MATERIAL) -> Any:
-    model = FakeTextModel(reply)
+    """Generate with the given reply and an all-ok review."""
+    model = FakeTextModel(reply, ALL_OK_REVIEW)
     return generate_questions(model, "math", "addition", material, count)
 
 
@@ -110,9 +107,9 @@ def generate(reply: str, count: int = 2, material: str = MATERIAL) -> Any:
 
 
 def test_valid_reply_returns_all_questions() -> None:
-    reply = reply_with([question_dict("7 + 5 = ?"), question_dict("6 + 6 = ?")])
+    reply = reply_with([question_dict("a"), question_dict("b")])
     result = generate(reply)
-    assert [q.prompt for q in result.questions] == ["7 + 5 = ?", "6 + 6 = ?"]
+    assert names(result) == ["a", "b"]
     assert result.rejected == 0
 
 
@@ -132,8 +129,16 @@ def test_item_that_is_not_an_object_is_rejected() -> None:
 def test_extra_valid_questions_are_cut_to_count() -> None:
     reply = reply_with([question_dict("a"), question_dict("b"), question_dict("c")])
     result = generate(reply, count=2)
-    assert [q.prompt for q in result.questions] == ["a", "b"]
+    assert names(result) == ["a", "b"]
     assert result.rejected == 0
+
+
+def test_question_with_old_tag_and_hint_fields_is_rejected() -> None:
+    old_style = question_dict("old")
+    old_style["options"][1] |= {"mistake_tag": "concat", "hint": "חברו את המספרים."}
+    result = generate(reply_with([question_dict("new"), old_style]))
+    assert names(result) == ["new"]
+    assert result.rejected == 1
 
 
 # --- Bad replies -------------------------------------------------------------------
@@ -162,11 +167,18 @@ def test_no_valid_questions_raises(questions: list[Any]) -> None:
         generate(reply_with(questions))
 
 
-# --- Material and instructions ---------------------------------------------------
+# --- Calls, material and instructions ----------------------------------------------
+
+
+def test_two_calls_questions_then_review() -> None:
+    model = FakeTextModel(reply_with([question_dict()]), ALL_OK_REVIEW)
+    generate_questions(model, "math", "addition", MATERIAL, 1)
+    assert len(model.calls) == 2
+    assert model.calls[0][0] == build_instructions("math", "addition", 1)
 
 
 def test_material_reaches_model_unchanged_and_not_in_instructions() -> None:
-    model = FakeTextModel(reply_with([question_dict()]))
+    model = FakeTextModel(reply_with([question_dict()]), ALL_OK_REVIEW)
     generate_questions(model, "math", "addition", MATERIAL, 1)
     assert model.material == MATERIAL
     assert MATERIAL not in model.instructions
@@ -184,154 +196,136 @@ def test_instructions_ask_for_json() -> None:
     assert "JSON" in build_instructions("math", "addition", 3)
 
 
-def test_instructions_ask_for_plural_hints() -> None:
-    assert "plural" in build_instructions("math", "addition", 3)
-
-
-# --- Mistake maps -----------------------------------------------------------------------
-
-MAPPED_CHAPTER = "addition and subtraction"
-ONLY_THESE_TAGS = "Use only these mistake tags"
-DIFFERENT_MISTAKES = "each wrong option must reveal a different mistake"
-
-
-def test_instructions_list_allowed_tags_when_map_exists() -> None:
-    instructions = build_instructions("math", MAPPED_CHAPTER, 3)
-    assert ONLY_THESE_TAGS in instructions
-    for line in [
-        "- count: off by one, a counting slip (7 + 5 = 11)",
-        "- op: used the other operation (9 - 4 = 13)",
-        "- concat: glued the digits together (7 + 5 = 75)",
-        "- reverse: reversed the digits of the answer (9 + 3 = 21)",
+def test_instructions_ask_for_typical_mistakes() -> None:
+    instructions = build_instructions("math", "addition", 3)
+    for phrase in [
+        "typical mistake that children really make",
+        "75 for 7 + 5",
+        '"goed" for the past of "go"',
+        "not a random wrong answer",
+        "Wrong options in one question should show different mistakes",
     ]:
-        assert line in instructions
+        assert phrase in instructions
 
 
-def test_instructions_have_open_tags_when_no_map() -> None:
+def test_instructions_drop_tags_and_hints() -> None:
+    instructions = build_instructions("math", "addition", 3)
+    for removed in ["mistake_tag", "hint", "did_not_know"]:
+        assert removed not in instructions
+
+
+# --- Language ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("subject", "chapter"), [("math", "addition"), ("english", "animals")]
+)
+def test_instructions_ask_for_hebrew_prompt_in_plural(
+    subject: str, chapter: str
+) -> None:
+    instructions = build_instructions(subject, chapter, 3)
+    assert "Write the prompt in Hebrew" in instructions
+    assert "grades 1-3 in Israel" in instructions
+    assert "plural" in instructions
+
+
+def test_instructions_keep_options_in_the_taught_language() -> None:
     instructions = build_instructions("english", "animals", 3)
-    assert ONLY_THESE_TAGS not in instructions
-    assert "glued the digits together" not in instructions
-    assert "snake_case" in instructions
+    assert "options in the language being taught" in instructions
+    assert "English words or sentences" in instructions
 
 
-@pytest.mark.parametrize(
-    ("subject", "chapter"), [("math", MAPPED_CHAPTER), ("english", "animals")]
-)
-def test_instructions_ask_for_different_mistakes(subject: str, chapter: str) -> None:
-    assert DIFFERENT_MISTAKES in build_instructions(subject, chapter, 3)
-
-
-def question_with_tags(prompt: str, first_tag: str, second_tag: str) -> dict[str, Any]:
-    question = question_dict(prompt)
-    question["options"][1]["mistake_tag"] = first_tag
-    question["options"][2]["mistake_tag"] = second_tag
-    return question
-
-
-@pytest.mark.parametrize(
-    ("subject", "chapter"),
-    [("math", MAPPED_CHAPTER), ("Math", " Addition and  Subtraction ")],
-)
-def test_question_with_tag_outside_map_is_rejected(subject: str, chapter: str) -> None:
-    reply = reply_with(
-        [
-            question_with_tags("good", "concat", "count"),
-            # Unchecked, so only the map rejects it (not check_math).
-            unchecked(question_with_tags("bad", "concat", "forgot_to_carry")),
-        ]
-    )
-    model = FakeTextModel(reply)
-    result = generate_questions(model, subject, chapter, MATERIAL, 2)
-    assert [q.prompt for q in result.questions] == ["good"]
+@pytest.mark.parametrize("prompt", ["What is 7 + 5?", "7 + 5 = ?"])
+def test_question_without_hebrew_prompt_is_rejected(prompt: str) -> None:
+    not_hebrew = question_dict("x") | {"prompt": prompt}
+    result = generate(reply_with([question_dict("good"), not_hebrew]))
+    assert names(result) == ["good"]
     assert result.rejected == 1
 
 
-def test_any_tag_is_allowed_when_no_map() -> None:
-    question = unchecked(question_with_tags("free", "forgot_to_carry", "misread"))
+def test_english_options_with_hebrew_prompt_are_kept() -> None:
+    question = {
+        "kind": "choose_one",
+        "subject": "english",
+        "chapter": "verbs",
+        "prompt": "מה צורת העבר של 'go'?",
+        "options": [
+            {"text": "went", "is_correct": True},
+            {"text": "goed", "is_correct": False},
+            {"text": "go", "is_correct": False},
+        ],
+    }
     model = FakeTextModel(reply_with([question]), review_reply(True))
-    result = generate_questions(model, "math", "addition", MATERIAL, 1)
-    assert len(result.questions) == 1
-    assert result.rejected == 0
+    result = generate_questions(model, "english", "verbs", MATERIAL, 1)
+    assert [option.text for option in result.questions[0].options] == [
+        "went",
+        "goed",
+        "go",
+    ]
 
 
-# --- Review of questions without an exercise --------------------------------------------
+def test_schema_sent_to_the_model_has_no_tags_or_hints() -> None:
+    schema_part = build_instructions("math", "addition", 3).split("JSON schema:")[1]
+    assert '"text"' in schema_part
+    assert '"is_correct"' in schema_part
+    assert "mistake_tag" not in schema_part
+    assert "hint" not in schema_part
 
 
-def test_math_only_questions_are_not_reviewed() -> None:
-    model = FakeTextModel(reply_with([question_dict("a"), question_dict("b")]))
-    result = generate_questions(model, "math", "addition", MATERIAL, 2)
-    assert len(model.calls) == 1
-    assert result.review_rejected == 0
+# --- Review --------------------------------------------------------------------------
+
+
+def test_every_valid_question_is_reviewed_in_one_call() -> None:
+    reply = reply_with([question_dict("a"), broken_question_dict(), question_dict("b")])
+    model = FakeTextModel(reply, ALL_OK_REVIEW)
+    result = generate_questions(model, "math", "addition", MATERIAL, 3)
+
+    assert len(model.calls) == 2
+    sent = json.loads(model.calls[1][1])
+    assert list(sent) == ["questions"]
+    # Only valid questions are reviewed, in their original order.
+    assert [name_of(item["prompt"]) for item in sent["questions"]] == ["a", "b"]
+    assert names(result) == ["a", "b"]
 
 
 def test_question_rejected_by_review_is_rejected_and_counted() -> None:
-    reply = reply_with(
-        [unchecked(question_dict("good")), unchecked(question_dict("bad"))]
-    )
+    reply = reply_with([question_dict("good"), question_dict("bad")])
     model = FakeTextModel(reply, review_reply(True, False))
     result = generate_questions(model, "math", "addition", MATERIAL, 2)
-    assert [q.prompt for q in result.questions] == ["good"]
+    assert names(result) == ["good"]
     assert result.review_rejected == 1
     assert result.rejected == 1
 
 
-def test_only_questions_without_exercise_are_reviewed() -> None:
-    reply = reply_with(
-        [
-            question_dict("math"),
-            unchecked(question_dict("words")),
-            question_dict("more"),
-        ]
-    )
-    model = FakeTextModel(reply, review_reply(True))
-    result = generate_questions(model, "math", "addition", MATERIAL, 3)
-
-    assert len(model.calls) == 2
-    reviewed = json.loads(model.calls[1][1])["questions"]
-    assert [item["prompt"] for item in reviewed] == ["words"]
-    # Order of the questions is kept.
-    assert [q.prompt for q in result.questions] == ["math", "words", "more"]
+def test_review_rejections_keep_question_and_problem() -> None:
+    reply = reply_with([question_dict("good"), question_dict("bad")])
+    model = FakeTextModel(reply, review_reply(True, False))
+    result = generate_questions(model, "math", "addition", MATERIAL, 2)
+    assert [
+        (name_of(rejection.question.prompt), rejection.problem)
+        for rejection in result.review_rejections
+    ] == [("bad", "Not clear.")]
 
 
 def test_review_happens_before_cutting_to_count() -> None:
     # The first question fails the review, so the extra one fills its place.
-    reply = reply_with([unchecked(question_dict("bad")), question_dict("extra")])
-    model = FakeTextModel(reply, review_reply(False))
+    reply = reply_with([question_dict("bad"), question_dict("extra")])
+    model = FakeTextModel(reply, review_reply(False, True))
     result = generate_questions(model, "math", "addition", MATERIAL, 1)
-    assert [q.prompt for q in result.questions] == ["extra"]
+    assert names(result) == ["extra"]
 
 
 def test_all_rejected_by_review_raises() -> None:
-    reply = reply_with([unchecked(question_dict("bad"))])
+    reply = reply_with([question_dict("bad")])
     model = FakeTextModel(reply, review_reply(False))
     with pytest.raises(GenerationError):
         generate_questions(model, "math", "addition", MATERIAL, 1)
 
 
-# --- Math check --------------------------------------------------------------------------
-
-
-def test_instructions_ask_for_exercise() -> None:
-    assert '"exercise"' in build_instructions("math", MAPPED_CHAPTER, 3)
-
-
-def test_math_question_that_fails_check_is_rejected() -> None:
-    wrong_answer = question_dict("wrong answer")
-    wrong_answer["options"][0]["text"] = "13"  # 7 + 5 is not 13
-    reply = reply_with([question_dict("good"), wrong_answer])
-    result = generate(reply)
-    assert [q.prompt for q in result.questions] == ["good"]
-    assert result.rejected == 1
-
-
-def test_math_question_with_wrong_tag_is_rejected() -> None:
-    # 75 is a concat mistake, and 11 is a count mistake: swapping tags fails.
-    reply = reply_with(
-        [question_dict("good"), question_with_tags("swapped", "count", "concat")]
-    )
-    result = generate(reply)
-    assert [q.prompt for q in result.questions] == ["good"]
-    assert result.rejected == 1
+def test_instructions_do_not_ask_for_code_check_fields() -> None:
+    instructions = build_instructions("math", "addition", 3)
+    assert "exercise" not in instructions
+    assert "code_checked" not in instructions
 
 
 # --- Input limits ---------------------------------------------------------------------
@@ -352,6 +346,14 @@ def test_material_at_max_length_is_allowed() -> None:
 def test_invalid_count_raises(count: int) -> None:
     with pytest.raises(ValueError, match="count"):
         generate(reply_with([question_dict()]), count=count)
+
+
+@pytest.mark.parametrize(("material", "count"), [("", 1), (MATERIAL, 0)])
+def test_invalid_input_makes_no_model_call(material: str, count: int) -> None:
+    model = FakeTextModel()
+    with pytest.raises(ValueError):
+        generate_questions(model, "math", "addition", material, count)
+    assert model.calls == []
 
 
 @pytest.mark.parametrize("count", [1, MAX_QUESTIONS])

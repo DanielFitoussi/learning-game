@@ -4,7 +4,13 @@ from typing import Any
 import pytest
 
 from app.questions import Question
-from app.review import build_review_instructions, review_questions
+from app.review import (
+    NO_REASON,
+    NO_VALID_REVIEW,
+    ReviewVerdict,
+    build_review_instructions,
+    review_questions,
+)
 
 # --- Helpers -------------------------------------------------------------------
 
@@ -29,21 +35,10 @@ def english_question(prompt: str) -> Question:
             "chapter": "animals",
             "prompt": prompt,
             "options": [
-                {"text": "cat", "is_correct": True, "mistake_tag": None, "hint": None},
-                {
-                    "text": "dog",
-                    "is_correct": False,
-                    "mistake_tag": "similar_meaning",
-                    "hint": "A dog barks.",
-                },
-                {
-                    "text": "hat",
-                    "is_correct": False,
-                    "mistake_tag": "similar_sound",
-                    "hint": "A hat is not an animal.",
-                },
+                {"text": "cat", "is_correct": True},
+                {"text": "dog", "is_correct": False},
+                {"text": "hat", "is_correct": False},
             ],
-            "code_checked": False,
         }
     )
 
@@ -59,24 +54,50 @@ def reviews_reply(*reviews: dict[str, Any]) -> str:
     return json.dumps({"reviews": list(reviews)})
 
 
-def run_review(reply: str, questions: list[Question] = QUESTIONS) -> list[bool]:
+def run_review(
+    reply: str, questions: list[Question] = QUESTIONS
+) -> list[ReviewVerdict]:
     return review_questions(ReplayModel(reply), questions)
+
+
+def oks(verdicts: list[ReviewVerdict]) -> list[bool]:
+    return [verdict.ok for verdict in verdicts]
+
+
+def problems(verdicts: list[ReviewVerdict]) -> list[str | None]:
+    return [verdict.problem for verdict in verdicts]
 
 
 # --- Verdicts --------------------------------------------------------------------------
 
 
 def test_all_ok() -> None:
-    assert run_review(reviews_reply(review(0, True), review(1, True))) == [True, True]
+    verdicts = run_review(reviews_reply(review(0, True), review(1, True)))
+    assert oks(verdicts) == [True, True]
+    assert problems(verdicts) == [None, None]
 
 
-def test_one_not_ok() -> None:
+def test_one_not_ok_keeps_the_problem_text() -> None:
     reply = reviews_reply(review(0, True), review(1, False, "Two options are correct."))
-    assert run_review(reply) == [True, False]
+    verdicts = run_review(reply)
+    assert oks(verdicts) == [True, False]
+    assert problems(verdicts) == [None, "Two options are correct."]
+
+
+def test_ok_review_has_no_problem_even_if_text_is_given() -> None:
+    reply = reviews_reply(review(0, True, "Looks fine."), review(1, True))
+    assert problems(run_review(reply)) == [None, None]
+
+
+def test_not_ok_without_text_gets_a_fixed_reason() -> None:
+    reply = reviews_reply(review(0, True), review(1, False, None))
+    assert problems(run_review(reply)) == [None, NO_REASON]
 
 
 def test_reviews_in_any_order() -> None:
-    assert run_review(reviews_reply(review(1, False), review(0, True))) == [True, False]
+    verdicts = run_review(reviews_reply(review(1, False, "Unclear."), review(0, True)))
+    assert oks(verdicts) == [True, False]
+    assert problems(verdicts) == [None, "Unclear."]
 
 
 @pytest.mark.parametrize(
@@ -90,21 +111,32 @@ def test_reviews_in_any_order() -> None:
     ],
 )
 def test_invalid_reply_means_all_not_ok(reply: str) -> None:
-    assert run_review(reply) == [False, False]
+    verdicts = run_review(reply)
+    assert oks(verdicts) == [False, False]
+    assert problems(verdicts) == [NO_VALID_REVIEW, NO_VALID_REVIEW]
 
 
 def test_missing_index_is_not_ok() -> None:
-    assert run_review(reviews_reply(review(0, True))) == [True, False]
+    verdicts = run_review(reviews_reply(review(0, True)))
+    assert oks(verdicts) == [True, False]
+    assert problems(verdicts) == [None, NO_VALID_REVIEW]
 
 
 def test_index_out_of_range_is_ignored() -> None:
     reply = reviews_reply(review(0, True), review(1, True), review(7, False))
-    assert run_review(reply) == [True, True]
+    assert oks(run_review(reply)) == [True, True]
 
 
-def test_conflicting_reviews_for_one_index_are_not_ok() -> None:
-    reply = reviews_reply(review(0, True), review(1, True), review(1, False))
-    assert run_review(reply) == [True, False]
+def test_conflicting_reviews_keep_the_first_problem() -> None:
+    reply = reviews_reply(
+        review(0, True),
+        review(1, True),
+        review(1, False, "First problem."),
+        review(1, False, "Second problem."),
+    )
+    verdicts = run_review(reply)
+    assert oks(verdicts) == [True, False]
+    assert problems(verdicts) == [None, "First problem."]
 
 
 # --- The call to the model -------------------------------------------------------------
@@ -116,25 +148,36 @@ def test_empty_list_does_not_call_the_model() -> None:
     assert model.calls == []
 
 
-def test_all_questions_are_sent_in_one_call_as_json() -> None:
+def test_questions_are_sent_in_one_call_as_json() -> None:
     model = ReplayModel(reviews_reply(review(0, True), review(1, True)))
     review_questions(model, QUESTIONS)
 
     assert len(model.calls) == 1
     instructions, material = model.calls[0]
     assert instructions == build_review_instructions()
-    sent = json.loads(material)["questions"]
-    assert [item["index"] for item in sent] == [0, 1]
-    assert [item["prompt"] for item in sent] == ["Which animal says 'meow'?", "Q2"]
+    sent = json.loads(material)
+    assert list(sent) == ["questions"]
+    assert [item["index"] for item in sent["questions"]] == [0, 1]
+    assert [item["prompt"] for item in sent["questions"]] == [
+        "Which animal says 'meow'?",
+        "Q2",
+    ]
 
 
-def test_review_instructions_cover_the_checks() -> None:
+def test_review_instructions_have_the_four_checks() -> None:
     instructions = build_review_instructions().lower()
     for phrase in [
         "really correct",
         "no other option is also correct",
         "clear for a child",
         "subject and chapter",
+        "all four checks",
         "json",
     ]:
         assert phrase in instructions
+
+
+def test_review_instructions_drop_hint_and_tag_checks() -> None:
+    instructions = build_review_instructions().lower()
+    for removed in ["hint", "mistake_tag", "mistake_map", "did_not_know"]:
+        assert removed not in instructions
