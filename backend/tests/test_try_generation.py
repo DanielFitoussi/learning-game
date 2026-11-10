@@ -43,6 +43,7 @@ def question_dict() -> dict[str, Any]:
             },
         ],
         "code_checked": True,
+        "exercise": {"a": 7, "op": "+", "b": 5},
     }
 
 

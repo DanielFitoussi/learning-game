@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from app.questions import AnswerOption, Question
+from app.questions import AnswerOption, Exercise, Question
 
 # --- Helpers -------------------------------------------------------------------
 
@@ -43,6 +43,29 @@ def make_math_question(**changes: Any) -> Question:
         "prompt": "7 + 5 = ?",
         "options": math_options(),
         "code_checked": True,
+        "exercise": {"a": 7, "op": "+", "b": 5},
+    }
+    data.update(changes)
+    return Question.model_validate(data)
+
+
+def make_english_question(**changes: Any) -> Question:
+    """Build a valid English question, with some fields replaced."""
+    data: dict[str, Any] = {
+        "kind": "choose_one",
+        "subject": "english",
+        "chapter": "animals",
+        "prompt": "Which animal says 'meow'?",
+        "options": [
+            correct_option("cat"),
+            wrong_option("dog", "similar_meaning", "A dog barks. Which animal meows?"),
+            wrong_option(
+                "hat",
+                "similar_sound",
+                "'Hat' sounds like 'cat', but it is not an animal.",
+            ),
+        ],
+        "code_checked": False,
     }
     data.update(changes)
     return Question.model_validate(data)
@@ -63,29 +86,47 @@ def test_valid_math_question() -> None:
 
 
 def test_valid_english_question() -> None:
-    question = Question.model_validate(
-        {
-            "kind": "choose_one",
-            "subject": "english",
-            "chapter": "animals",
-            "prompt": "Which animal says 'meow'?",
-            "options": [
-                correct_option("cat"),
-                wrong_option(
-                    "dog", "similar_meaning", "A dog barks. Which animal meows?"
-                ),
-                wrong_option(
-                    "hat",
-                    "similar_sound",
-                    "'Hat' sounds like 'cat', but it is not an animal.",
-                ),
-            ],
-            "code_checked": False,
-        }
-    )
+    question = make_english_question()
     assert question.subject == "english"
     assert question.code_checked is False
+    assert question.exercise is None
     assert len(question.options) == 3
+
+
+# --- Exercise -------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("op", ["+", "-"])
+def test_valid_exercise(op: str) -> None:
+    exercise = Exercise.model_validate({"a": 7, "op": op, "b": 5})
+    assert (exercise.a, exercise.op, exercise.b) == (7, op, 5)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"a": -1, "op": "+", "b": 5},
+        {"a": 7, "op": "+", "b": -1},
+        {"a": 7, "op": "*", "b": 5},
+        {"a": 7, "op": "+", "b": 5, "c": 1},
+    ],
+)
+def test_invalid_exercise_is_rejected(data: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        Exercise.model_validate(data)
+
+
+def test_math_question_has_exercise() -> None:
+    assert make_math_question().exercise == Exercise(a=7, op="+", b=5)
+
+
+def test_code_checked_question_needs_exercise() -> None:
+    with pytest.raises(ValidationError, match="exercise"):
+        make_math_question(exercise=None)
+
+
+def test_question_without_code_check_may_skip_exercise() -> None:
+    assert make_english_question(exercise=None).exercise is None
 
 
 # --- Not-empty text fields -----------------------------------------------------------
