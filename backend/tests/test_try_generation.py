@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from app.generation import GenerationResult, ReviewRejection
+from app.generation import GenerationResult, ReviewRejection, build_instructions
 from app.questions import Question
 from app.try_generation import format_result, main
 
@@ -16,8 +16,10 @@ class FakeTextModel:
 
     def __init__(self, *replies: str) -> None:
         self.replies = list(replies)
+        self.instructions: list[str] = []
 
     def complete_json(self, instructions: str, material: str) -> str:
+        self.instructions.append(instructions)
         return self.replies.pop(0)
 
 
@@ -179,3 +181,34 @@ def test_main_returns_1_when_openai_model_is_not_set(
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     assert main([str(material_file), "math", "addition", "1"]) == 1
     assert "OPENAI_MODEL" in capsys.readouterr().err
+
+
+# --- --grade -------------------------------------------------------------------------
+
+
+def run_main_and_get_instructions(material_file: Path, *extra: str) -> str:
+    """Run main with a fake model and return the instructions of the question call."""
+    model = FakeTextModel(json.dumps({"questions": [question_dict()]}), ALL_OK_REVIEW)
+    assert main([str(material_file), "math", "addition", "1", *extra], model=model) == 0
+    return model.instructions[0]
+
+
+def test_main_passes_grade_to_generation(material_file: Path) -> None:
+    instructions = run_main_and_get_instructions(material_file, "--grade", "1")
+    assert instructions == build_instructions("math", "addition", 1, grade=1)
+
+
+def test_main_uses_grade_2_when_grade_is_not_given(material_file: Path) -> None:
+    instructions = run_main_and_get_instructions(material_file)
+    assert instructions == build_instructions("math", "addition", 1, grade=2)
+
+
+def test_main_rejects_grade_outside_1_to_3(
+    material_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    model = FakeTextModel()
+    with pytest.raises(SystemExit) as exit_info:
+        main([str(material_file), "math", "addition", "1", "--grade", "4"], model=model)
+    assert exit_info.value.code == 2
+    assert "--grade" in capsys.readouterr().err
+    assert model.instructions == []

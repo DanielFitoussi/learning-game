@@ -3,10 +3,9 @@
 from sqlmodel import Session, select
 
 from app import questions
+from app.grades import check_grade
 from app.models import Answer, Game, PlaySession, Question
 
-MIN_GRADE = 1
-MAX_GRADE = 3
 MODES = ("learning", "test")
 
 
@@ -18,8 +17,7 @@ def save_game(
     game_questions: list[questions.Question],
 ) -> int:
     """Save a game and its questions in the given order. Returns the game id."""
-    if not MIN_GRADE <= grade <= MAX_GRADE:
-        raise ValueError(f"grade must be {MIN_GRADE}-{MAX_GRADE}, got {grade}")
+    check_grade(grade)
 
     game = Game(subject=subject, chapter=chapter, grade=grade)
     db.add(game)

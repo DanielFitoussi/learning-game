@@ -19,8 +19,13 @@ def database_url() -> str:
 
 
 def make_engine(url: str) -> Engine:
-    """Create an engine for the given database URL."""
-    return create_engine(url)
+    """Create an engine for the given database URL.
+
+    For SQLite, a connection may be used from more than one thread, because
+    FastAPI runs normal (non-async) endpoints and dependencies in a thread pool.
+    """
+    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
+    return create_engine(url, connect_args=connect_args)
 
 
 def create_tables(engine: Engine) -> None:

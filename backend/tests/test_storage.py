@@ -1,24 +1,9 @@
-from collections.abc import Iterator
-
 import pytest
-from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, create_engine, select
+from sqlmodel import Session, select
 
 from app import questions
-from app.db import create_tables
 from app.models import Answer
 from app.storage import get_questions, save_answer, save_game, start_session
-
-
-@pytest.fixture
-def db() -> Iterator[Session]:
-    """A fresh in-memory SQLite database for each test."""
-    engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
-    )
-    create_tables(engine)
-    with Session(engine) as session:
-        yield session
 
 
 def make_question(prompt: str, correct: str, wrong: list[str]) -> questions.Question:

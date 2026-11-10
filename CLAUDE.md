@@ -20,6 +20,8 @@ It finds out where each child struggles and reports to teachers and parents.
 ## Commands
 - Run tests: `uv run pytest` (inside backend/)
 - Lint: `uv run ruff check .` (inside backend/)
+- Run the server locally: `uv run --env-file .env fastapi dev app/api.py` (inside backend/).
+  API docs at http://127.0.0.1:8000/docs
 
 ## Code style
 - Type hints on every function.
