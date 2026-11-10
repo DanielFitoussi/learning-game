@@ -47,9 +47,11 @@ def question_dict() -> dict[str, Any]:
     }
 
 
-def make_result(rejected: int = 0) -> GenerationResult:
+def make_result(rejected: int = 0, review_rejected: int = 0) -> GenerationResult:
     return GenerationResult(
-        questions=[Question.model_validate(question_dict())], rejected=rejected
+        questions=[Question.model_validate(question_dict())],
+        rejected=rejected,
+        review_rejected=review_rejected,
     )
 
 
@@ -88,6 +90,11 @@ def test_format_result_shows_returned_and_rejected_counts() -> None:
     summary = format_result(make_result(rejected=3)).splitlines()[-1]
     assert "1" in summary
     assert "rejected 3" in summary
+
+
+def test_format_result_shows_review_rejected_count() -> None:
+    summary = format_result(make_result(rejected=3, review_rejected=2)).splitlines()[-1]
+    assert "2 by the review" in summary
 
 
 # --- main -----------------------------------------------------------------------------

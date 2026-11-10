@@ -43,7 +43,10 @@ def format_result(result: GenerationResult) -> str:
         _format_question(number, question)
         for number, question in enumerate(result.questions, start=1)
     ]
-    summary = f"Returned {len(result.questions)} questions, rejected {result.rejected}."
+    summary = (
+        f"Returned {len(result.questions)} questions, rejected {result.rejected}"
+        f" ({result.review_rejected} by the review)."
+    )
     return "\n\n".join([*blocks, summary]) + "\n"
 
 
