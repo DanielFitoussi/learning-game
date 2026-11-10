@@ -22,6 +22,19 @@ class FakeTextModel:
 
 
 ALL_OK_REVIEW = json.dumps({"reviews": [{"index": 0, "ok": True, "problem": None}]})
+MAP_REPLY = json.dumps(
+    {
+        "misconceptions": [
+            {"tag": "concat", "description": "Glued the digits together."},
+            {"tag": "count", "description": "Off by one, a counting slip."},
+        ]
+    }
+)
+MISTAKE_MAP = {
+    "concat": "Glued the digits together.",
+    "count": "Off by one, a counting slip.",
+    "did_not_know": "The child did not know this; no specific misconception.",
+}
 
 
 def question_dict() -> dict[str, Any]:
@@ -53,6 +66,7 @@ def make_result(rejected: int = 0, review_rejected: int = 0) -> GenerationResult
         questions=[Question.model_validate(question_dict())],
         rejected=rejected,
         review_rejected=review_rejected,
+        mistake_map=MISTAKE_MAP,
     )
 
 
@@ -93,6 +107,13 @@ def test_format_result_shows_returned_and_rejected_counts() -> None:
     assert "rejected 3" in summary
 
 
+def test_format_result_shows_the_mistake_map() -> None:
+    text = format_result(make_result())
+    assert "Mistake map:" in text
+    for tag, description in MISTAKE_MAP.items():
+        assert f"- {tag}: {description}" in text
+
+
 def test_format_result_shows_review_rejected_count() -> None:
     summary = format_result(make_result(rejected=3, review_rejected=2)).splitlines()[-1]
     assert "2 by the review" in summary
@@ -105,7 +126,9 @@ def test_main_prints_result_and_writes_out_file(
     material_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out_file = tmp_path / "out.txt"
-    model = FakeTextModel(json.dumps({"questions": [question_dict()]}), ALL_OK_REVIEW)
+    model = FakeTextModel(
+        MAP_REPLY, json.dumps({"questions": [question_dict()]}), ALL_OK_REVIEW
+    )
 
     code = main(
         [str(material_file), "math", "addition", "1", "--out", str(out_file)],

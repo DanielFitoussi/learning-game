@@ -37,9 +37,17 @@ def _format_question(number: int, question: Question) -> str:
     return "\n".join(lines)
 
 
+def _format_mistake_map(mistake_map: dict[str, str]) -> str:
+    """The mistake map, one tag and its description per line."""
+    lines = ["Mistake map:"]
+    lines += [f"  - {tag}: {description}" for tag, description in mistake_map.items()]
+    return "\n".join(lines)
+
+
 def format_result(result: GenerationResult) -> str:
-    """Readable text for all questions, with a summary line at the end."""
-    blocks = [
+    """The mistake map, then all questions, with a summary line at the end."""
+    blocks = [_format_mistake_map(result.mistake_map)]
+    blocks += [
         _format_question(number, question)
         for number, question in enumerate(result.questions, start=1)
     ]

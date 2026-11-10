@@ -6,12 +6,14 @@ that matches the TextModel protocol (see app/llm.py for the real one).
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import ValidationError
 
-from app.questions import MAX_OPTIONS, MIN_OPTIONS, Question
+from app.errors import GenerationError
+from app.map_builder import build_mistake_map
+from app.questions import DID_NOT_KNOW_TAG, MAX_OPTIONS, MIN_OPTIONS, Question
 from app.review import review_questions
 from app.text_model import TextModel
 
@@ -29,10 +31,6 @@ MAX_MATERIAL_CHARS = 20_000
 MAX_QUESTIONS = 10
 
 
-class GenerationError(Exception):
-    """The model's reply could not be turned into any valid question."""
-
-
 @dataclass(frozen=True)
 class GenerationResult:
     questions: list[Question]
@@ -40,26 +38,30 @@ class GenerationResult:
     """All rejected questions, including those rejected by the review."""
     review_rejected: int = 0
     """Questions rejected by the second-model review."""
+    mistake_map: dict[str, str] = field(default_factory=dict)
+    """The chapter's mistake map ({tag: description}) the questions were built with."""
 
 
 def _mistake_tag_rules(tags: dict[str, str] | None) -> str:
     """Instruction lines about mistake tags: a fixed list if a map is given."""
-    if tags is None:
-        tag_rule = """- Every wrong option has a "mistake_tag": a snake_case name (lowercase English
-  letters, digits and underscores, starting with a letter) for the misconception
-  that choosing it reveals, for example "concat" or "similar_sound"."""
-    else:
-        allowed = "\n".join(
-            f"  - {tag}: {description}" for tag, description in tags.items()
-        )
-        tag_rule = f"""- Every wrong option has a "mistake_tag" for the misconception that choosing
-  it reveals. Use only these mistake tags:
-{allowed}"""
     different = (
         "- In one question, each wrong option must reveal a different mistake"
         " (a different mistake_tag)."
     )
-    return f"{tag_rule}\n{different}"
+    if tags is None:
+        tag_rule = """- Every wrong option has a "mistake_tag": a snake_case name (lowercase English
+  letters, digits and underscores, starting with a letter) for the misconception
+  that choosing it reveals, for example "concat" or "similar_sound"."""
+        return f"{tag_rule}\n{different}"
+
+    allowed = "\n".join(
+        f"  - {tag}: {description}" for tag, description in tags.items()
+    )
+    return f"""- Every wrong option has a "mistake_tag". Use only these mistake tags:
+{allowed}
+- Use a misconception tag only when the wrong option really shows that misconception.
+  Otherwise use "{DID_NOT_KNOW_TAG}".
+{different} Only "{DID_NOT_KNOW_TAG}" may repeat."""
 
 
 def build_instructions(
@@ -195,19 +197,20 @@ def generate_questions(
 ) -> GenerationResult:
     """Ask the model for `count` questions about the material and validate them.
 
-    Invalid questions are skipped and counted in `rejected`. Every valid
-    question is then reviewed by a second model call; those that fail are also
-    counted in `review_rejected`. If more questions remain than asked for, only
-    the first `count` are kept.
-
-    No mistake map is used yet, so the model picks its own tags.
+    Three model calls, in order:
+    1. Build the chapter's mistake map. An invalid map raises GenerationError.
+    2. Write the questions, using only the map's tags. Invalid questions and
+       questions with other tags are skipped and counted in `rejected`.
+    3. Review every valid question. Those that fail are also counted in
+       `review_rejected`.
+    If more questions remain than asked for, only the first `count` are kept.
     """
     _check_inputs(material, count)
-    mistake_tags = None
-    instructions = build_instructions(subject, chapter, count, mistake_tags)
+    mistake_map = build_mistake_map(model, subject, chapter, material)
+    instructions = build_instructions(subject, chapter, count, mistake_map)
     reply = model.complete_json(instructions, material)
 
-    validated, rejected = _validate_questions(_parse_reply(reply), mistake_tags)
+    validated, rejected = _validate_questions(_parse_reply(reply), mistake_map)
     questions = _keep_reviewed(model, validated)
     review_rejected = len(validated) - len(questions)
     rejected += review_rejected
@@ -217,4 +220,5 @@ def generate_questions(
         questions=questions[:count],
         rejected=rejected,
         review_rejected=review_rejected,
+        mistake_map=mistake_map,
     )

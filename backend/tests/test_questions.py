@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from app.questions import AnswerOption, Question
+from app.questions import DID_NOT_KNOW_TAG, AnswerOption, Question
 
 # --- Helpers -------------------------------------------------------------------
 
@@ -208,6 +208,31 @@ def test_wrong_options_with_same_mistake_tag_are_rejected() -> None:
         wrong_option("57", "concat"),
     ]
     with pytest.raises(ValidationError, match="mistake_tag"):
+        make_math_question(options=options)
+
+
+def test_did_not_know_may_repeat() -> None:
+    options = [
+        correct_option("12"),
+        wrong_option("75", DID_NOT_KNOW_TAG),
+        wrong_option("30", DID_NOT_KNOW_TAG),
+        wrong_option("11", "count"),
+    ]
+    question = make_math_question(options=options)
+    assert [option.mistake_tag for option in question.options[1:]] == [
+        DID_NOT_KNOW_TAG,
+        DID_NOT_KNOW_TAG,
+        "count",
+    ]
+
+
+def test_repeated_did_not_know_still_needs_different_hints() -> None:
+    options = [
+        correct_option("12"),
+        wrong_option("75", DID_NOT_KNOW_TAG, "Try again."),
+        wrong_option("30", DID_NOT_KNOW_TAG, "Try again."),
+    ]
+    with pytest.raises(ValidationError, match="hints"):
         make_math_question(options=options)
 
 

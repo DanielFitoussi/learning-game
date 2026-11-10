@@ -15,6 +15,9 @@ NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length
 
 MistakeTag = Annotated[str, StringConstraints(pattern=MISTAKE_TAG_PATTERN)]
 
+DID_NOT_KNOW_TAG = "did_not_know"
+"""Tag for a wrong answer that shows no specific misconception. It may repeat."""
+
 
 class AnswerOption(BaseModel):
     """One answer a child can pick."""
@@ -51,7 +54,10 @@ class Question(BaseModel):
 
     @model_validator(mode="after")
     def check_options(self) -> Self:
-        """One correct option, unique texts, and a different tag and hint per wrong option."""
+        """One correct option, unique texts, and a different tag and hint per wrong option.
+
+        The did_not_know tag is the one tag that may repeat in a question.
+        """
         correct_count = sum(option.is_correct for option in self.options)
         if correct_count != 1:
             raise ValueError(f"exactly one option must be correct, got {correct_count}")
@@ -60,9 +66,16 @@ class Question(BaseModel):
         if len(texts) != len(set(texts)):
             raise ValueError("option texts must be unique (ignoring case)")
 
-        tags = [option.mistake_tag for option in self.options if not option.is_correct]
+        tags = [
+            option.mistake_tag
+            for option in self.options
+            if not option.is_correct and option.mistake_tag != DID_NOT_KNOW_TAG
+        ]
         if len(tags) != len(set(tags)):
-            raise ValueError("wrong options must have different mistake_tags")
+            raise ValueError(
+                f"wrong options must have different mistake_tags"
+                f" (only {DID_NOT_KNOW_TAG} may repeat)"
+            )
 
         hints = [
             (option.hint or "").casefold()
