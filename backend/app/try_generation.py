@@ -11,13 +11,13 @@ import sys
 from pathlib import Path
 
 from app.generation import (
-    GRADES,
     GenerationError,
     GenerationResult,
     ReviewRejection,
     TextModel,
     generate_questions,
 )
+from app.grades import GRADES
 from app.llm import OpenAITextModel
 from app.questions import AnswerOption, Question
 

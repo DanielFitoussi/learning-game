@@ -12,12 +12,12 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.errors import GenerationError
+from app.grades import check_grade
 from app.questions import MAX_OPTIONS, MIN_OPTIONS, Question
 from app.review import review_questions
 from app.text_model import TextModel
 
 __all__ = [
-    "GRADES",
     "MAX_MATERIAL_CHARS",
     "MAX_QUESTIONS",
     "GenerationError",
@@ -30,7 +30,6 @@ __all__ = [
 
 MAX_MATERIAL_CHARS = 20_000
 MAX_QUESTIONS = 10
-GRADES = (1, 2, 3)
 
 
 @dataclass(frozen=True)
@@ -55,12 +54,6 @@ class GenerationResult:
         return len(self.review_rejections)
 
 
-def _check_grade(grade: int) -> None:
-    """Raise ValueError if the grade is not one we write questions for."""
-    if grade not in GRADES:
-        raise ValueError(f"grade must be one of {GRADES}, got {grade}")
-
-
 def _reading_level(grade: int) -> str:
     """Instruction lines about how simple the prompt must be for this grade."""
     if grade == 1:
@@ -77,7 +70,7 @@ def build_instructions(subject: str, chapter: str, count: int, *, grade: int) ->
 
     Raises ValueError if the grade is not 1, 2 or 3.
     """
-    _check_grade(grade)
+    check_grade(grade)
     schema = json.dumps(Question.model_json_schema(), indent=2)
     return f"""You write practice questions for children.
 
