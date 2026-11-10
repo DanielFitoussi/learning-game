@@ -25,23 +25,16 @@ WRONG_MARK = "✗"
 
 
 def _format_option(option: AnswerOption) -> str:
-    """One option line: a check mark for the correct one, tag and hint for wrong ones."""
+    """One option line, with a check mark for the correct one."""
     if option.is_correct:
         return f"   {CORRECT_MARK} {option.text}"
-    return f"   {WRONG_MARK} {option.text}  [{option.mistake_tag}] {option.hint}"
+    return f"   {WRONG_MARK} {option.text}"
 
 
 def _format_question(number: int, question: Question) -> str:
     """The question prompt followed by its options, one per line."""
     lines = [f"{number}. {question.prompt}"]
     lines += [_format_option(option) for option in question.options]
-    return "\n".join(lines)
-
-
-def _format_mistake_map(mistake_map: dict[str, str]) -> str:
-    """The mistake map, one tag and its description per line."""
-    lines = ["Mistake map:"]
-    lines += [f"  - {tag}: {description}" for tag, description in mistake_map.items()]
     return "\n".join(lines)
 
 
@@ -53,12 +46,11 @@ def _format_review_rejections(rejections: list[ReviewRejection]) -> str:
 
 
 def format_result(result: GenerationResult) -> str:
-    """The mistake map, the questions, the review rejections, then a summary line.
+    """The questions, the review rejections, then a summary line.
 
     The review section is left out when the review rejected nothing.
     """
-    blocks = [_format_mistake_map(result.mistake_map)]
-    blocks += [
+    blocks = [
         _format_question(number, question)
         for number, question in enumerate(result.questions, start=1)
     ]

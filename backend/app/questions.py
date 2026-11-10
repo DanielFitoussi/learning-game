@@ -7,16 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 MIN_OPTIONS = 3
 MAX_OPTIONS = 4
 
-MISTAKE_TAG_PATTERN = r"^[a-z][a-z0-9_]*$"
-"""snake_case: lowercase letters, digits and underscores, starting with a letter."""
-
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 """Text with leading/trailing spaces removed, that is not empty afterwards."""
-
-MistakeTag = Annotated[str, StringConstraints(pattern=MISTAKE_TAG_PATTERN)]
-
-DID_NOT_KNOW_TAG = "did_not_know"
-"""Tag for a wrong answer that shows no specific misconception. It may repeat."""
 
 
 class AnswerOption(BaseModel):
@@ -26,19 +18,6 @@ class AnswerOption(BaseModel):
 
     text: NonEmptyStr
     is_correct: bool
-    mistake_tag: MistakeTag | None
-    hint: NonEmptyStr | None
-
-    @model_validator(mode="after")
-    def check_tag_and_hint(self) -> Self:
-        """A wrong option needs a tag and a hint; the correct option has neither."""
-        has_tag_or_hint = self.mistake_tag is not None or self.hint is not None
-        has_tag_and_hint = self.mistake_tag is not None and self.hint is not None
-        if self.is_correct and has_tag_or_hint:
-            raise ValueError("the correct option must not have a mistake_tag or a hint")
-        if not self.is_correct and not has_tag_and_hint:
-            raise ValueError("a wrong option must have a mistake_tag and a hint")
-        return self
 
 
 class Question(BaseModel):
@@ -54,10 +33,7 @@ class Question(BaseModel):
 
     @model_validator(mode="after")
     def check_options(self) -> Self:
-        """One correct option, unique texts, and a different tag and hint per wrong option.
-
-        The did_not_know tag is the one tag that may repeat in a question.
-        """
+        """Exactly one option is correct, and option texts are unique."""
         correct_count = sum(option.is_correct for option in self.options)
         if correct_count != 1:
             raise ValueError(f"exactly one option must be correct, got {correct_count}")
@@ -65,23 +41,4 @@ class Question(BaseModel):
         texts = [option.text.casefold() for option in self.options]
         if len(texts) != len(set(texts)):
             raise ValueError("option texts must be unique (ignoring case)")
-
-        tags = [
-            option.mistake_tag
-            for option in self.options
-            if not option.is_correct and option.mistake_tag != DID_NOT_KNOW_TAG
-        ]
-        if len(tags) != len(set(tags)):
-            raise ValueError(
-                f"wrong options must have different mistake_tags"
-                f" (only {DID_NOT_KNOW_TAG} may repeat)"
-            )
-
-        hints = [
-            (option.hint or "").casefold()
-            for option in self.options
-            if not option.is_correct
-        ]
-        if len(hints) != len(set(hints)):
-            raise ValueError("wrong options must have different hints (ignoring case)")
         return self

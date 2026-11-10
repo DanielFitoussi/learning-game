@@ -35,19 +35,9 @@ def english_question(prompt: str) -> Question:
             "chapter": "animals",
             "prompt": prompt,
             "options": [
-                {"text": "cat", "is_correct": True, "mistake_tag": None, "hint": None},
-                {
-                    "text": "dog",
-                    "is_correct": False,
-                    "mistake_tag": "similar_meaning",
-                    "hint": "A dog barks.",
-                },
-                {
-                    "text": "hat",
-                    "is_correct": False,
-                    "mistake_tag": "similar_sound",
-                    "hint": "A hat is not an animal.",
-                },
+                {"text": "cat", "is_correct": True},
+                {"text": "dog", "is_correct": False},
+                {"text": "hat", "is_correct": False},
             ],
         }
     )
@@ -64,16 +54,10 @@ def reviews_reply(*reviews: dict[str, Any]) -> str:
     return json.dumps({"reviews": list(reviews)})
 
 
-MISTAKE_MAP = {
-    "similar_sound": "Mixed up words that sound alike.",
-    "did_not_know": "The child did not know this; no specific misconception.",
-}
-
-
 def run_review(
     reply: str, questions: list[Question] = QUESTIONS
 ) -> list[ReviewVerdict]:
-    return review_questions(ReplayModel(reply), questions, MISTAKE_MAP)
+    return review_questions(ReplayModel(reply), questions)
 
 
 def oks(verdicts: list[ReviewVerdict]) -> list[bool]:
@@ -160,19 +144,19 @@ def test_conflicting_reviews_keep_the_first_problem() -> None:
 
 def test_empty_list_does_not_call_the_model() -> None:
     model = ReplayModel()
-    assert review_questions(model, [], MISTAKE_MAP) == []
+    assert review_questions(model, []) == []
     assert model.calls == []
 
 
-def test_questions_and_map_are_sent_in_one_call_as_json() -> None:
+def test_questions_are_sent_in_one_call_as_json() -> None:
     model = ReplayModel(reviews_reply(review(0, True), review(1, True)))
-    review_questions(model, QUESTIONS, MISTAKE_MAP)
+    review_questions(model, QUESTIONS)
 
     assert len(model.calls) == 1
     instructions, material = model.calls[0]
     assert instructions == build_review_instructions()
     sent = json.loads(material)
-    assert sent["mistake_map"] == MISTAKE_MAP
+    assert list(sent) == ["questions"]
     assert [item["index"] for item in sent["questions"]] == [0, 1]
     assert [item["prompt"] for item in sent["questions"]] == [
         "Which animal says 'meow'?",
@@ -180,19 +164,20 @@ def test_questions_and_map_are_sent_in_one_call_as_json() -> None:
     ]
 
 
-def test_review_instructions_cover_the_checks() -> None:
+def test_review_instructions_have_the_four_checks() -> None:
     instructions = build_review_instructions().lower()
     for phrase in [
         "really correct",
         "no other option is also correct",
         "clear for a child",
         "subject and chapter",
-        "hint fits the mistake of its option",
-        "does not give away the answer",
-        "mistake_tag fits that option",
-        "did_not_know",
-        "mistake_map",
-        "all six checks",
+        "all four checks",
         "json",
     ]:
         assert phrase in instructions
+
+
+def test_review_instructions_drop_hint_and_tag_checks() -> None:
+    instructions = build_review_instructions().lower()
+    for removed in ["hint", "mistake_tag", "mistake_map", "did_not_know"]:
+        assert removed not in instructions

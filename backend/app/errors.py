@@ -1,7 +1,6 @@
 """Errors shared by the generation steps.
 
-GenerationError lives in its own module so that generation.py and
-map_builder.py can both use it without importing each other.
+GenerationError lives in its own module so that other modules can use it.
 """
 
 

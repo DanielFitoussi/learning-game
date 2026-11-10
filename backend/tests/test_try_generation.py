@@ -22,19 +22,6 @@ class FakeTextModel:
 
 
 ALL_OK_REVIEW = json.dumps({"reviews": [{"index": 0, "ok": True, "problem": None}]})
-MAP_REPLY = json.dumps(
-    {
-        "misconceptions": [
-            {"tag": "concat", "description": "Glued the digits together."},
-            {"tag": "count", "description": "Off by one, a counting slip."},
-        ]
-    }
-)
-MISTAKE_MAP = {
-    "concat": "Glued the digits together.",
-    "count": "Off by one, a counting slip.",
-    "did_not_know": "The child did not know this; no specific misconception.",
-}
 
 
 def question_dict(prompt: str = "כמה זה 7 + 5?") -> dict[str, Any]:
@@ -44,19 +31,9 @@ def question_dict(prompt: str = "כמה זה 7 + 5?") -> dict[str, Any]:
         "chapter": "addition",
         "prompt": prompt,
         "options": [
-            {"text": "12", "is_correct": True, "mistake_tag": None, "hint": None},
-            {
-                "text": "75",
-                "is_correct": False,
-                "mistake_tag": "concat",
-                "hint": "חברו את המספרים, אל תדביקו אותם.",
-            },
-            {
-                "text": "11",
-                "is_correct": False,
-                "mistake_tag": "count",
-                "hint": "ספרו שוב לאט ובזהירות.",
-            },
+            {"text": "12", "is_correct": True},
+            {"text": "75", "is_correct": False},
+            {"text": "11", "is_correct": False},
         ],
     }
 
@@ -73,7 +50,6 @@ def make_result(
         questions=[Question.model_validate(question_dict())],
         rejected=rejected,
         review_rejections=review_rejections or [],
-        mistake_map=MISTAKE_MAP,
     )
 
 
@@ -98,14 +74,10 @@ def test_format_result_shows_prompt_and_marks_correct_option() -> None:
     assert "✓" not in line_containing(text, "75")
 
 
-def test_format_result_shows_tag_and_hint_for_wrong_options() -> None:
+def test_format_result_shows_wrong_options_by_text_only() -> None:
     text = format_result(make_result())
-    concat_line = line_containing(text, "75")
-    assert "concat" in concat_line
-    assert "חברו את המספרים, אל תדביקו אותם." in concat_line
-    count_line = line_containing(text, "11")
-    assert "count" in count_line
-    assert "ספרו שוב לאט ובזהירות." in count_line
+    assert line_containing(text, "75").strip() == "✗ 75"
+    assert line_containing(text, "11").strip() == "✗ 11"
 
 
 def test_format_result_shows_returned_and_rejected_counts() -> None:
@@ -114,16 +86,13 @@ def test_format_result_shows_returned_and_rejected_counts() -> None:
     assert "rejected 3" in summary
 
 
-def test_format_result_shows_the_mistake_map() -> None:
-    text = format_result(make_result())
-    assert "Mistake map:" in text
-    for tag, description in MISTAKE_MAP.items():
-        assert f"- {tag}: {description}" in text
+def test_format_result_has_no_mistake_map() -> None:
+    assert "Mistake map:" not in format_result(make_result())
 
 
 TWO_REJECTIONS = [
     rejection("כמה זה 8 + 4?", "Two options are correct."),
-    rejection("כמה זה 9 + 3?", "The hint gives away the answer."),
+    rejection("כמה זה 9 + 3?", "The question is not clear."),
 ]
 
 
@@ -139,7 +108,7 @@ def test_format_result_shows_questions_rejected_by_the_review() -> None:
     header = lines.index("Rejected by the review:")
     assert lines[header + 1 : header + 3] == [
         "  - כמה זה 8 + 4?: Two options are correct.",
-        "  - כמה זה 9 + 3?: The hint gives away the answer.",
+        "  - כמה זה 9 + 3?: The question is not clear.",
     ]
     # The section comes after the questions and before the summary.
     assert header > lines.index("1. כמה זה 7 + 5?")
@@ -157,9 +126,7 @@ def test_main_prints_result_and_writes_out_file(
     material_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out_file = tmp_path / "out.txt"
-    model = FakeTextModel(
-        MAP_REPLY, json.dumps({"questions": [question_dict()]}), ALL_OK_REVIEW
-    )
+    model = FakeTextModel(json.dumps({"questions": [question_dict()]}), ALL_OK_REVIEW)
 
     code = main(
         [str(material_file), "math", "addition", "1", "--out", str(out_file)],
