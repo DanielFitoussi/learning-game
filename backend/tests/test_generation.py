@@ -100,7 +100,7 @@ ALL_OK_REVIEW = review_reply(*[True] * 20)
 def generate(reply: str, count: int = 2, material: str = MATERIAL) -> Any:
     """Generate with the given reply and an all-ok review."""
     model = FakeTextModel(reply, ALL_OK_REVIEW)
-    return generate_questions(model, "math", "addition", material, count)
+    return generate_questions(model, "math", "addition", material, count, grade=2)
 
 
 # --- Valid and partly valid replies ----------------------------------------------
@@ -172,20 +172,20 @@ def test_no_valid_questions_raises(questions: list[Any]) -> None:
 
 def test_two_calls_questions_then_review() -> None:
     model = FakeTextModel(reply_with([question_dict()]), ALL_OK_REVIEW)
-    generate_questions(model, "math", "addition", MATERIAL, 1)
+    generate_questions(model, "math", "addition", MATERIAL, 1, grade=2)
     assert len(model.calls) == 2
-    assert model.calls[0][0] == build_instructions("math", "addition", 1)
+    assert model.calls[0][0] == build_instructions("math", "addition", 1, grade=2)
 
 
 def test_material_reaches_model_unchanged_and_not_in_instructions() -> None:
     model = FakeTextModel(reply_with([question_dict()]), ALL_OK_REVIEW)
-    generate_questions(model, "math", "addition", MATERIAL, 1)
+    generate_questions(model, "math", "addition", MATERIAL, 1, grade=2)
     assert model.material == MATERIAL
     assert MATERIAL not in model.instructions
 
 
 def test_instructions_contain_subject_chapter_and_count() -> None:
-    instructions = build_instructions("english", "animals", 7)
+    instructions = build_instructions("english", "animals", 7, grade=2)
     assert "english" in instructions
     assert "animals" in instructions
     assert "7" in instructions
@@ -193,11 +193,11 @@ def test_instructions_contain_subject_chapter_and_count() -> None:
 
 def test_instructions_ask_for_json() -> None:
     # OpenAI's JSON mode requires the word "JSON" in the instructions.
-    assert "JSON" in build_instructions("math", "addition", 3)
+    assert "JSON" in build_instructions("math", "addition", 3, grade=2)
 
 
 def test_instructions_ask_for_typical_mistakes() -> None:
-    instructions = build_instructions("math", "addition", 3)
+    instructions = build_instructions("math", "addition", 3, grade=2)
     for phrase in [
         "typical mistake that children really make",
         "75 for 7 + 5",
@@ -209,7 +209,7 @@ def test_instructions_ask_for_typical_mistakes() -> None:
 
 
 def test_instructions_drop_tags_and_hints() -> None:
-    instructions = build_instructions("math", "addition", 3)
+    instructions = build_instructions("math", "addition", 3, grade=2)
     for removed in ["mistake_tag", "hint", "did_not_know"]:
         assert removed not in instructions
 
@@ -223,16 +223,67 @@ def test_instructions_drop_tags_and_hints() -> None:
 def test_instructions_ask_for_hebrew_prompt_in_plural(
     subject: str, chapter: str
 ) -> None:
-    instructions = build_instructions(subject, chapter, 3)
+    instructions = build_instructions(subject, chapter, 3, grade=2)
     assert "Write the prompt in Hebrew" in instructions
-    assert "grades 1-3 in Israel" in instructions
     assert "plural" in instructions
 
 
 def test_instructions_keep_options_in_the_taught_language() -> None:
-    instructions = build_instructions("english", "animals", 3)
+    instructions = build_instructions("english", "animals", 3, grade=2)
     assert "options in the language being taught" in instructions
     assert "English words or sentences" in instructions
+
+
+# --- Grade -------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("grade", [1, 2, 3])
+def test_instructions_say_the_grade(grade: int) -> None:
+    instructions = build_instructions("math", "addition", 3, grade=grade)
+    assert f"The children are in grade {grade} in Israel" in instructions
+
+
+def test_grade_1_instructions_ask_for_simple_text_with_niqqud() -> None:
+    instructions = build_instructions("math", "addition", 3, grade=1)
+    for phrase in [
+        "just learning to read",
+        "very short sentences",
+        "simple, everyday words",
+        "full Hebrew vowel marks (niqqud)",
+    ]:
+        assert phrase in instructions
+
+
+@pytest.mark.parametrize("grade", [2, 3])
+def test_grade_2_and_3_instructions_ask_for_short_text_without_niqqud(
+    grade: int,
+) -> None:
+    instructions = build_instructions("math", "addition", 3, grade=grade)
+    assert "short and clear sentences" in instructions
+    assert "niqqud) are not needed" in instructions
+    assert "just learning to read" not in instructions
+    assert "full Hebrew vowel marks" not in instructions
+
+
+@pytest.mark.parametrize("grade", [0, 4, -1])
+def test_build_instructions_rejects_invalid_grade(grade: int) -> None:
+    with pytest.raises(ValueError, match="grade"):
+        build_instructions("math", "addition", 3, grade=grade)
+
+
+def test_invalid_grade_makes_no_model_call() -> None:
+    model = FakeTextModel()
+    with pytest.raises(ValueError, match="grade"):
+        generate_questions(model, "math", "addition", MATERIAL, 1, grade=4)
+    assert model.calls == []
+
+
+def test_prompt_with_niqqud_is_kept() -> None:
+    # Grade 1 prompts carry vowel marks; they still count as Hebrew.
+    with_niqqud = question_dict("n") | {"prompt": "n: כַּמָּה זֶה 7 + 5?"}
+    result = generate(reply_with([with_niqqud]))
+    assert names(result) == ["n"]
+    assert result.rejected == 0
 
 
 @pytest.mark.parametrize("prompt", ["What is 7 + 5?", "7 + 5 = ?"])
@@ -256,7 +307,7 @@ def test_english_options_with_hebrew_prompt_are_kept() -> None:
         ],
     }
     model = FakeTextModel(reply_with([question]), review_reply(True))
-    result = generate_questions(model, "english", "verbs", MATERIAL, 1)
+    result = generate_questions(model, "english", "verbs", MATERIAL, 1, grade=2)
     assert [option.text for option in result.questions[0].options] == [
         "went",
         "goed",
@@ -265,7 +316,9 @@ def test_english_options_with_hebrew_prompt_are_kept() -> None:
 
 
 def test_schema_sent_to_the_model_has_no_tags_or_hints() -> None:
-    schema_part = build_instructions("math", "addition", 3).split("JSON schema:")[1]
+    schema_part = build_instructions("math", "addition", 3, grade=2).split(
+        "JSON schema:"
+    )[1]
     assert '"text"' in schema_part
     assert '"is_correct"' in schema_part
     assert "mistake_tag" not in schema_part
@@ -278,7 +331,7 @@ def test_schema_sent_to_the_model_has_no_tags_or_hints() -> None:
 def test_every_valid_question_is_reviewed_in_one_call() -> None:
     reply = reply_with([question_dict("a"), broken_question_dict(), question_dict("b")])
     model = FakeTextModel(reply, ALL_OK_REVIEW)
-    result = generate_questions(model, "math", "addition", MATERIAL, 3)
+    result = generate_questions(model, "math", "addition", MATERIAL, 3, grade=2)
 
     assert len(model.calls) == 2
     sent = json.loads(model.calls[1][1])
@@ -291,7 +344,7 @@ def test_every_valid_question_is_reviewed_in_one_call() -> None:
 def test_question_rejected_by_review_is_rejected_and_counted() -> None:
     reply = reply_with([question_dict("good"), question_dict("bad")])
     model = FakeTextModel(reply, review_reply(True, False))
-    result = generate_questions(model, "math", "addition", MATERIAL, 2)
+    result = generate_questions(model, "math", "addition", MATERIAL, 2, grade=2)
     assert names(result) == ["good"]
     assert result.review_rejected == 1
     assert result.rejected == 1
@@ -300,7 +353,7 @@ def test_question_rejected_by_review_is_rejected_and_counted() -> None:
 def test_review_rejections_keep_question_and_problem() -> None:
     reply = reply_with([question_dict("good"), question_dict("bad")])
     model = FakeTextModel(reply, review_reply(True, False))
-    result = generate_questions(model, "math", "addition", MATERIAL, 2)
+    result = generate_questions(model, "math", "addition", MATERIAL, 2, grade=2)
     assert [
         (name_of(rejection.question.prompt), rejection.problem)
         for rejection in result.review_rejections
@@ -311,7 +364,7 @@ def test_review_happens_before_cutting_to_count() -> None:
     # The first question fails the review, so the extra one fills its place.
     reply = reply_with([question_dict("bad"), question_dict("extra")])
     model = FakeTextModel(reply, review_reply(False, True))
-    result = generate_questions(model, "math", "addition", MATERIAL, 1)
+    result = generate_questions(model, "math", "addition", MATERIAL, 1, grade=2)
     assert names(result) == ["extra"]
 
 
@@ -319,11 +372,11 @@ def test_all_rejected_by_review_raises() -> None:
     reply = reply_with([question_dict("bad")])
     model = FakeTextModel(reply, review_reply(False))
     with pytest.raises(GenerationError):
-        generate_questions(model, "math", "addition", MATERIAL, 1)
+        generate_questions(model, "math", "addition", MATERIAL, 1, grade=2)
 
 
 def test_instructions_do_not_ask_for_code_check_fields() -> None:
-    instructions = build_instructions("math", "addition", 3)
+    instructions = build_instructions("math", "addition", 3, grade=2)
     assert "exercise" not in instructions
     assert "code_checked" not in instructions
 
@@ -352,7 +405,7 @@ def test_invalid_count_raises(count: int) -> None:
 def test_invalid_input_makes_no_model_call(material: str, count: int) -> None:
     model = FakeTextModel()
     with pytest.raises(ValueError):
-        generate_questions(model, "math", "addition", material, count)
+        generate_questions(model, "math", "addition", material, count, grade=2)
     assert model.calls == []
 
 

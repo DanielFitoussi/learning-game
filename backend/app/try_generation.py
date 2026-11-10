@@ -2,7 +2,7 @@
 
 Run inside backend/:
     uv run --env-file .env python -m app.try_generation \
-        <material_file> <subject> <chapter> <count> [--out <file>]
+        <material_file> <subject> <chapter> <count> [--grade 1|2|3] [--out <file>]
 """
 
 import argparse
@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from app.generation import (
+    GRADES,
     GenerationError,
     GenerationResult,
     ReviewRejection,
@@ -72,6 +73,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("subject", help='for example "math" or "english"')
     parser.add_argument("chapter", help='for example "addition and subtraction"')
     parser.add_argument("count", type=int, help="number of questions to ask for")
+    parser.add_argument(
+        "--grade",
+        type=int,
+        choices=GRADES,
+        default=2,
+        help="the children's grade (default: 2)",
+    )
     parser.add_argument("--out", type=Path, help="also write the result to this file")
     return parser.parse_args(argv)
 
@@ -84,7 +92,12 @@ def main(argv: list[str] | None = None, model: TextModel | None = None) -> int:
         material = args.material_file.read_text(encoding="utf-8-sig")
         text_model = model if model is not None else OpenAITextModel()
         result = generate_questions(
-            text_model, args.subject, args.chapter, material, args.count
+            text_model,
+            args.subject,
+            args.chapter,
+            material,
+            args.count,
+            grade=args.grade,
         )
     except (GenerationError, ValueError, OSError, RuntimeError) as error:
         print(f"Error: {error}", file=sys.stderr)
