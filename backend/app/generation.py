@@ -22,6 +22,7 @@ __all__ = [
     "MAX_QUESTIONS",
     "GenerationError",
     "GenerationResult",
+    "ReviewRejection",
     "TextModel",
     "build_instructions",
     "generate_questions",
@@ -32,14 +33,27 @@ MAX_QUESTIONS = 10
 
 
 @dataclass(frozen=True)
+class ReviewRejection:
+    """A question the review rejected, with the reviewer's problem text."""
+
+    question: Question
+    problem: str
+
+
+@dataclass(frozen=True)
 class GenerationResult:
     questions: list[Question]
     rejected: int
     """All rejected questions, including those rejected by the review."""
-    review_rejected: int = 0
-    """Questions rejected by the second-model review."""
+    review_rejections: list[ReviewRejection] = field(default_factory=list)
+    """Questions the review rejected, each with its problem text."""
     mistake_map: dict[str, str] = field(default_factory=dict)
     """The chapter's mistake map ({tag: description}) the questions were built with."""
+
+    @property
+    def review_rejected(self) -> int:
+        """How many questions the review rejected."""
+        return len(self.review_rejections)
 
 
 def _mistake_tag_rules(tags: dict[str, str] | None) -> str:
@@ -59,8 +73,8 @@ def _mistake_tag_rules(tags: dict[str, str] | None) -> str:
     )
     return f"""- Every wrong option has a "mistake_tag". Use only these mistake tags:
 {allowed}
-- Use a misconception tag only when the wrong option really shows that misconception.
-  Otherwise use "{DID_NOT_KNOW_TAG}".
+- Prefer a misconception tag from the list when the wrong option fits it.
+  Use "{DID_NOT_KNOW_TAG}" only when no tag fits.
 {different} Only "{DID_NOT_KNOW_TAG}" may repeat."""
 
 
@@ -186,10 +200,19 @@ def _validate_questions(
     return questions, rejected
 
 
-def _keep_reviewed(model: TextModel, questions: list[Question]) -> list[Question]:
-    """Review every question in one call and keep only those the reviewer accepts."""
-    verdicts = review_questions(model, questions)
-    return [question for question, ok in zip(questions, verdicts, strict=True) if ok]
+def _keep_reviewed(
+    model: TextModel, questions: list[Question], mistake_map: dict[str, str]
+) -> tuple[list[Question], list[ReviewRejection]]:
+    """Review every question in one call. Return the kept ones and the rejections."""
+    kept: list[Question] = []
+    rejections: list[ReviewRejection] = []
+    verdicts = review_questions(model, questions, mistake_map)
+    for question, verdict in zip(questions, verdicts, strict=True):
+        if verdict.ok:
+            kept.append(question)
+        else:
+            rejections.append(ReviewRejection(question, verdict.problem or ""))
+    return kept, rejections
 
 
 def generate_questions(
@@ -201,8 +224,9 @@ def generate_questions(
     1. Build the chapter's mistake map. An invalid map raises GenerationError.
     2. Write the questions, using only the map's tags. Invalid questions and
        questions with other tags are skipped and counted in `rejected`.
-    3. Review every valid question. Those that fail are also counted in
-       `review_rejected`.
+    3. Review every valid question, together with the map. Those that fail are
+       kept in `review_rejections` with the reviewer's problem text, and are
+       also counted in `rejected`.
     If more questions remain than asked for, only the first `count` are kept.
     """
     _check_inputs(material, count)
@@ -211,14 +235,13 @@ def generate_questions(
     reply = model.complete_json(instructions, material)
 
     validated, rejected = _validate_questions(_parse_reply(reply), mistake_map)
-    questions = _keep_reviewed(model, validated)
-    review_rejected = len(validated) - len(questions)
-    rejected += review_rejected
+    questions, review_rejections = _keep_reviewed(model, validated, mistake_map)
+    rejected += len(review_rejections)
     if not questions:
         raise GenerationError(f"no valid questions in the reply ({rejected} rejected)")
     return GenerationResult(
         questions=questions[:count],
         rejected=rejected,
-        review_rejected=review_rejected,
+        review_rejections=review_rejections,
         mistake_map=mistake_map,
     )

@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from app.generation import GenerationResult
+from app.generation import GenerationResult, ReviewRejection
 from app.questions import Question
 from app.try_generation import format_result, main
 
@@ -37,12 +37,12 @@ MISTAKE_MAP = {
 }
 
 
-def question_dict() -> dict[str, Any]:
+def question_dict(prompt: str = "כמה זה 7 + 5?") -> dict[str, Any]:
     return {
         "kind": "choose_one",
         "subject": "math",
         "chapter": "addition",
-        "prompt": "כמה זה 7 + 5?",
+        "prompt": prompt,
         "options": [
             {"text": "12", "is_correct": True, "mistake_tag": None, "hint": None},
             {
@@ -61,11 +61,18 @@ def question_dict() -> dict[str, Any]:
     }
 
 
-def make_result(rejected: int = 0, review_rejected: int = 0) -> GenerationResult:
+def rejection(prompt: str, problem: str) -> ReviewRejection:
+    question = Question.model_validate(question_dict(prompt))
+    return ReviewRejection(question=question, problem=problem)
+
+
+def make_result(
+    rejected: int = 0, review_rejections: list[ReviewRejection] | None = None
+) -> GenerationResult:
     return GenerationResult(
         questions=[Question.model_validate(question_dict())],
         rejected=rejected,
-        review_rejected=review_rejected,
+        review_rejections=review_rejections or [],
         mistake_map=MISTAKE_MAP,
     )
 
@@ -114,9 +121,33 @@ def test_format_result_shows_the_mistake_map() -> None:
         assert f"- {tag}: {description}" in text
 
 
+TWO_REJECTIONS = [
+    rejection("כמה זה 8 + 4?", "Two options are correct."),
+    rejection("כמה זה 9 + 3?", "The hint gives away the answer."),
+]
+
+
 def test_format_result_shows_review_rejected_count() -> None:
-    summary = format_result(make_result(rejected=3, review_rejected=2)).splitlines()[-1]
+    result = make_result(rejected=3, review_rejections=TWO_REJECTIONS)
+    summary = format_result(result).splitlines()[-1]
     assert "2 by the review" in summary
+
+
+def test_format_result_shows_questions_rejected_by_the_review() -> None:
+    text = format_result(make_result(rejected=2, review_rejections=TWO_REJECTIONS))
+    lines = text.splitlines()
+    header = lines.index("Rejected by the review:")
+    assert lines[header + 1 : header + 3] == [
+        "  - כמה זה 8 + 4?: Two options are correct.",
+        "  - כמה זה 9 + 3?: The hint gives away the answer.",
+    ]
+    # The section comes after the questions and before the summary.
+    assert header > lines.index("1. כמה זה 7 + 5?")
+    assert lines[-1].startswith("Returned")
+
+
+def test_format_result_leaves_out_review_section_when_nothing_was_rejected() -> None:
+    assert "Rejected by the review:" not in format_result(make_result())
 
 
 # --- main -----------------------------------------------------------------------------

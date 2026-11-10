@@ -342,10 +342,11 @@ def test_instructions_ask_for_different_mistakes(
     assert DIFFERENT_MISTAKES in instructions
 
 
-def test_instructions_use_misconception_tags_only_when_really_shown() -> None:
+def test_instructions_prefer_map_tags_over_did_not_know() -> None:
     instructions = build_instructions("math", "addition", 3, SAMPLE_MAP)
-    assert "only when the wrong option really shows that misconception" in instructions
-    assert f'Otherwise use "{DID_NOT_KNOW_TAG}"' in instructions
+    assert "Prefer a misconception tag from the list" in instructions
+    assert "when the wrong option fits it" in instructions
+    assert f'Use "{DID_NOT_KNOW_TAG}" only when no tag fits' in instructions
     assert f'"{DID_NOT_KNOW_TAG}" may repeat' in instructions
 
 
@@ -437,6 +438,16 @@ def test_every_valid_question_is_reviewed_in_one_call() -> None:
     assert names(result) == ["a", "b"]
 
 
+def test_review_receives_the_mistake_map() -> None:
+    model = FakeTextModel(
+        DEFAULT_MAP_REPLY, reply_with([question_dict()]), ALL_OK_REVIEW
+    )
+    result = generate_questions(model, "math", "addition", MATERIAL, 1)
+    sent = json.loads(model.calls[2][1])
+    assert sent["mistake_map"] == result.mistake_map
+    assert DID_NOT_KNOW_TAG in sent["mistake_map"]
+
+
 def test_question_rejected_by_review_is_rejected_and_counted() -> None:
     reply = reply_with([question_dict("good"), question_dict("bad")])
     model = FakeTextModel(DEFAULT_MAP_REPLY, reply, review_reply(True, False))
@@ -444,6 +455,16 @@ def test_question_rejected_by_review_is_rejected_and_counted() -> None:
     assert names(result) == ["good"]
     assert result.review_rejected == 1
     assert result.rejected == 1
+
+
+def test_review_rejections_keep_question_and_problem() -> None:
+    reply = reply_with([question_dict("good"), question_dict("bad")])
+    model = FakeTextModel(DEFAULT_MAP_REPLY, reply, review_reply(True, False))
+    result = generate_questions(model, "math", "addition", MATERIAL, 2)
+    assert [
+        (name_of(rejection.question.prompt), rejection.problem)
+        for rejection in result.review_rejections
+    ] == [("bad", "Not clear.")]
 
 
 def test_review_happens_before_cutting_to_count() -> None:

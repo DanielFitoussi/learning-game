@@ -13,6 +13,7 @@ from pathlib import Path
 from app.generation import (
     GenerationError,
     GenerationResult,
+    ReviewRejection,
     TextModel,
     generate_questions,
 )
@@ -44,13 +45,25 @@ def _format_mistake_map(mistake_map: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def _format_review_rejections(rejections: list[ReviewRejection]) -> str:
+    """Each question the review rejected: its prompt and the problem."""
+    lines = ["Rejected by the review:"]
+    lines += [f"  - {item.question.prompt}: {item.problem}" for item in rejections]
+    return "\n".join(lines)
+
+
 def format_result(result: GenerationResult) -> str:
-    """The mistake map, then all questions, with a summary line at the end."""
+    """The mistake map, the questions, the review rejections, then a summary line.
+
+    The review section is left out when the review rejected nothing.
+    """
     blocks = [_format_mistake_map(result.mistake_map)]
     blocks += [
         _format_question(number, question)
         for number, question in enumerate(result.questions, start=1)
     ]
+    if result.review_rejections:
+        blocks.append(_format_review_rejections(result.review_rejections))
     summary = (
         f"Returned {len(result.questions)} questions, rejected {result.rejected}"
         f" ({result.review_rejected} by the review)."

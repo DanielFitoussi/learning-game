@@ -95,6 +95,37 @@ def test_map_instructions_say_not_to_include_did_not_know() -> None:
     assert DID_NOT_KNOW_TAG in build_map_instructions("math", "addition")
 
 
+def test_map_instructions_define_a_misconception() -> None:
+    instructions = build_map_instructions("math", "addition").lower()
+    for phrase in [
+        "many children make in the same way",
+        "wrong rule or a slip in a procedure",
+        "do not invent",
+    ]:
+        assert phrase in instructions
+
+
+def test_map_instructions_give_the_examples() -> None:
+    instructions = build_map_instructions("english", "verbs").lower()
+    for example in [
+        "counting one too many or too few",
+        "7 + 5 = 75",
+        "using the wrong operation",
+        "reversing the order",
+        "using the wrong tense",
+        'adding "ed" to an irregular verb',
+    ]:
+        assert example in instructions
+
+
+def test_map_instructions_limit_did_not_know_to_no_pattern() -> None:
+    instructions = build_map_instructions("math", "addition")
+    assert (
+        f'"{DID_NOT_KNOW_TAG}" is only for a wrong answer that shows no such pattern'
+        in (instructions)
+    )
+
+
 # --- Invalid replies (fail closed) -------------------------------------------------------
 
 
