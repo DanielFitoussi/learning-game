@@ -11,6 +11,12 @@ dist/
 # Secrets: never commit these
 .env
 
+# Local databases: they hold children's answers, never commit them
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # OS and editors
 .DS_Store
 .vscode/
