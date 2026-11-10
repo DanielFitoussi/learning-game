@@ -54,7 +54,13 @@ def question_dict(prompt: str = "7 + 5 = ?") -> dict[str, Any]:
             },
         ],
         "code_checked": True,
+        "exercise": {"a": 7, "op": "+", "b": 5},
     }
+
+
+def unchecked(question: dict[str, Any]) -> dict[str, Any]:
+    """The same question without a math check, so only other rules apply."""
+    return question | {"code_checked": False, "exercise": None}
 
 
 def broken_question_dict() -> dict[str, Any]:
@@ -157,6 +163,10 @@ def test_instructions_ask_for_json() -> None:
     assert "JSON" in build_instructions("math", "addition", 3)
 
 
+def test_instructions_ask_for_plural_hints() -> None:
+    assert "plural" in build_instructions("math", "addition", 3)
+
+
 # --- Mistake maps -----------------------------------------------------------------------
 
 MAPPED_CHAPTER = "addition and subtraction"
@@ -205,7 +215,8 @@ def test_question_with_tag_outside_map_is_rejected(subject: str, chapter: str) -
     reply = reply_with(
         [
             question_with_tags("good", "concat", "count"),
-            question_with_tags("bad", "concat", "forgot_to_carry"),
+            # Unchecked, so only the map rejects it (not check_math).
+            unchecked(question_with_tags("bad", "concat", "forgot_to_carry")),
         ]
     )
     model = FakeTextModel(reply)
@@ -215,10 +226,36 @@ def test_question_with_tag_outside_map_is_rejected(subject: str, chapter: str) -
 
 
 def test_any_tag_is_allowed_when_no_map() -> None:
-    reply = reply_with([question_with_tags("free", "forgot_to_carry", "misread")])
-    result = generate(reply, count=1)
+    question = unchecked(question_with_tags("free", "forgot_to_carry", "misread"))
+    result = generate(reply_with([question]), count=1)
     assert len(result.questions) == 1
     assert result.rejected == 0
+
+
+# --- Math check --------------------------------------------------------------------------
+
+
+def test_instructions_ask_for_exercise() -> None:
+    assert '"exercise"' in build_instructions("math", MAPPED_CHAPTER, 3)
+
+
+def test_math_question_that_fails_check_is_rejected() -> None:
+    wrong_answer = question_dict("wrong answer")
+    wrong_answer["options"][0]["text"] = "13"  # 7 + 5 is not 13
+    reply = reply_with([question_dict("good"), wrong_answer])
+    result = generate(reply)
+    assert [q.prompt for q in result.questions] == ["good"]
+    assert result.rejected == 1
+
+
+def test_math_question_with_wrong_tag_is_rejected() -> None:
+    # 75 is a concat mistake, and 11 is a count mistake: swapping tags fails.
+    reply = reply_with(
+        [question_dict("good"), question_with_tags("swapped", "count", "concat")]
+    )
+    result = generate(reply)
+    assert [q.prompt for q in result.questions] == ["good"]
+    assert result.rejected == 1
 
 
 # --- Input limits ---------------------------------------------------------------------

@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+from app.math_check import check_math
 from app.mistake_maps import get_mistake_tags
 from app.questions import MAX_OPTIONS, MIN_OPTIONS, Question
 
@@ -72,10 +73,13 @@ Rules for every question:
 - The correct option has "mistake_tag": null and "hint": null.
 {tag_rules}
 - Every wrong option has a "hint": one short, kind sentence for a child, written
-  in the language of the material.
+  in the language of the material. In Hebrew, speak to the children in the plural
+  form (for example "נסו שוב", not "נסה שוב" or "נסי שוב").
 - Option texts must all be different.
 - Set "subject" to "{subject}" and "chapter" to "{chapter}".
 - Set "code_checked" to true if the subject is math, otherwise false.
+- For math, set "exercise" to the calculation the question asks about, as
+  {{"a": <number>, "op": "+" or "-", "b": <number>}}. Otherwise set it to null.
 
 Answer with JSON only, no other text, in this shape:
 {{"questions": [ ... ]}}
@@ -135,7 +139,7 @@ def _validate_questions(
         except ValidationError:
             rejected += 1
             continue
-        if _uses_only_allowed_tags(question, allowed_tags):
+        if _uses_only_allowed_tags(question, allowed_tags) and not check_math(question):
             questions.append(question)
         else:
             rejected += 1
