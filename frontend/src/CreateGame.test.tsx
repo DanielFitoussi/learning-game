@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MESSAGES } from './api.ts'
 import CreateGame from './CreateGame.tsx'
@@ -6,6 +7,14 @@ import { LOADING_TEXT, STATUS_INTERVAL_MS, STATUS_LINES } from './createGameSett
 
 function fakeResponse(status: number, body: unknown = {}): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as Response
+}
+
+function renderCreateGame(): void {
+  render(
+    <MemoryRouter>
+      <CreateGame />
+    </MemoryRouter>,
+  )
 }
 
 function fillForm(): void {
@@ -31,7 +40,7 @@ describe('CreateGame', () => {
   it('sends what the teacher typed, with the grade as a number', async () => {
     const fetchMock = vi.fn().mockResolvedValue(fakeResponse(201, { game_id: 1, question_count: 3, rejected: 0 }))
     vi.stubGlobal('fetch', fetchMock)
-    render(<CreateGame />)
+    renderCreateGame()
 
     fillForm()
     submit()
@@ -49,7 +58,7 @@ describe('CreateGame', () => {
 
   it('disables the button and shows the loading text while waiting', () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
-    render(<CreateGame />)
+    renderCreateGame()
 
     fillForm()
     submit()
@@ -61,7 +70,7 @@ describe('CreateGame', () => {
   it('changes the status line every few seconds while waiting', () => {
     vi.useFakeTimers()
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
-    render(<CreateGame />)
+    renderCreateGame()
 
     fillForm()
     submit()
@@ -78,7 +87,7 @@ describe('CreateGame', () => {
       'fetch',
       vi.fn().mockResolvedValue(fakeResponse(201, { game_id: 42, question_count: 3, rejected: 0 })),
     )
-    render(<CreateGame />)
+    renderCreateGame()
 
     fillForm()
     submit()
@@ -96,7 +105,7 @@ describe('CreateGame', () => {
     ['network error', () => Promise.reject(new TypeError('Failed to fetch')), MESSAGES.serverDown],
   ])('shows the message for %s and keeps what was typed', async (_name, respond, message) => {
     vi.stubGlobal('fetch', vi.fn(respond))
-    render(<CreateGame />)
+    renderCreateGame()
 
     fillForm()
     submit()
@@ -111,10 +120,56 @@ describe('CreateGame', () => {
   })
 
   it('counts the characters in the material', () => {
-    render(<CreateGame />)
+    renderCreateGame()
 
     fireEvent.change(screen.getByLabelText('חומר הלימוד'), { target: { value: 'שלום' } })
 
     expect(screen.getByText('4 / 20,000 תווים')).toBeInTheDocument()
+  })
+
+  it('links to the play screen of the new game', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(fakeResponse(201, { game_id: 42, question_count: 3, rejected: 0 })),
+    )
+    renderCreateGame()
+
+    fillForm()
+    submit()
+
+    expect(await screen.findByRole('link', { name: 'למשחק' })).toHaveAttribute('href', '/play/42')
+  })
+
+  it('copies the full play link', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(fakeResponse(201, { game_id: 42, question_count: 3, rejected: 0 })),
+    )
+    renderCreateGame()
+
+    fillForm()
+    submit()
+    fireEvent.click(await screen.findByRole('button', { name: 'העתק קישור' }))
+
+    expect(await screen.findByText('הקישור הועתק!')).toBeInTheDocument()
+    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/play/42`)
+  })
+
+  it('shows the link when copying fails', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'))
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(fakeResponse(201, { game_id: 42, question_count: 3, rejected: 0 })),
+    )
+    renderCreateGame()
+
+    fillForm()
+    submit()
+    fireEvent.click(await screen.findByRole('button', { name: 'העתק קישור' }))
+
+    expect(await screen.findByText(`${window.location.origin}/play/42`)).toBeInTheDocument()
   })
 })

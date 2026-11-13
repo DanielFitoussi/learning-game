@@ -1,4 +1,5 @@
 import { useEffect, useState, type CSSProperties, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { ApiError, MESSAGES, createGame, type CreateGameResponse, type Grade } from './api.ts'
 import {
   LOADING_TEXT,
@@ -191,7 +192,27 @@ const CONFETTI_PIECES = Array.from({ length: 18 }, (_, i) => ({
   color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
 }))
 
+type CopyState = 'idle' | 'copied' | 'failed'
+
+/** The full link a child opens to play the game. */
+function playLink(gameId: number): string {
+  return `${window.location.origin}/play/${gameId}`
+}
+
 function SuccessCard({ result }: { result: CreateGameResponse }) {
+  const [copy, setCopy] = useState<CopyState>('idle')
+  const link = playLink(result.game_id)
+
+  async function handleCopy(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(link)
+      setCopy('copied')
+    } catch {
+      // No clipboard (or permission denied): show the link so it can be copied by hand.
+      setCopy('failed')
+    }
+  }
+
   return (
     <div className="success-card">
       <div className="confetti" aria-hidden="true">
@@ -216,6 +237,22 @@ function SuccessCard({ result }: { result: CreateGameResponse }) {
       {result.rejected > 0 && (
         <p className="success-note">{result.rejected} שאלות לא עברו את הבדיקה ולא נכללו.</p>
       )}
+      <div className="success-actions">
+        <Link className="primary-button play-link" to={`/play/${result.game_id}`}>
+          למשחק
+        </Link>
+        <button type="button" className="secondary-button" onClick={() => void handleCopy()}>
+          העתק קישור
+        </button>
+      </div>
+      <div role="status" aria-live="polite">
+        {copy === 'copied' && <p className="success-note">הקישור הועתק!</p>}
+        {copy === 'failed' && (
+          <p className="success-note">
+            העתיקו את הקישור: <span dir="ltr">{link}</span>
+          </p>
+        )}
+      </div>
     </div>
   )
 }
