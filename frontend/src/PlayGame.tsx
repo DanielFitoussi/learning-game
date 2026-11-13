@@ -1,11 +1,23 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useParams } from 'react-router-dom'
-import { ApiError, MESSAGES, getQuestions, sendAnswer, startSession, type PlayQuestion } from './api.ts'
+import {
+  ApiError,
+  MESSAGES,
+  getGame,
+  getQuestions,
+  sendAnswer,
+  startSession,
+  type GameMode,
+  type PlayQuestion,
+} from './api.ts'
 import {
   FEEDBACK,
   FEEDBACK_MS,
-  PLAY_MODE,
   PLAY_TEXT,
+  RESULT_LABEL,
+  RESULT_MARK,
+  SAVED_MS,
+  SAVED_TEXT,
   finishedText,
   progressText,
 } from './playSettings.ts'
@@ -16,11 +28,19 @@ import { canSpeak, speak } from './speech.ts'
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
-  | { kind: 'ready'; questions: PlayQuestion[] }
+  | { kind: 'ready'; mode: GameMode; questions: PlayQuestion[] }
 
 type Phase = 'name' | 'playing' | 'finished'
 
-type Feedback = 'correct' | 'wrong' | null
+/** "saved" is the neutral note of test mode; it says nothing about right or wrong. */
+type Feedback = 'correct' | 'wrong' | 'saved' | null
+
+/** How one answer went. "unknown" when a 409 told us it was saved on an earlier try. */
+type Result = 'correct' | 'wrong' | 'unknown'
+
+function feedbackText(feedback: Exclude<Feedback, null>): string {
+  return feedback === 'saved' ? SAVED_TEXT : FEEDBACK[feedback]
+}
 
 /** A 409 means the server already has this answer (e.g. the first reply was lost). */
 function isAlreadyAnswered(error: unknown): boolean {
@@ -47,7 +67,8 @@ function PlayGame() {
   const [startError, setStartError] = useState<string | null>(null)
   const [sessionId, setSessionId] = useState<number | null>(null)
   const [index, setIndex] = useState(0)
-  const [correctCount, setCorrectCount] = useState(0)
+  // One entry per answered question, in order.
+  const [results, setResults] = useState<Result[]>([])
   const [locked, setLocked] = useState(false)
   const [feedback, setFeedback] = useState<Feedback>(null)
   const [answerError, setAnswerError] = useState<string | null>(null)
@@ -58,17 +79,17 @@ function PlayGame() {
   const shownAtRef = useRef(0)
   const nextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Load the questions as soon as the screen opens, so a wrong link shows at once.
+  // Load the game and its questions as soon as the screen opens, so a wrong link shows at once.
   // The screen is keyed by game ID (see App.tsx), so this runs once per game.
   useEffect(() => {
     if (gameId === null) return
     let cancelled = false
-    getQuestions(gameId)
-      .then((questions) => {
+    Promise.all([getGame(gameId), getQuestions(gameId)])
+      .then(([game, questions]) => {
         if (cancelled) return
         // Shuffle each question's options once, here, so re-renders never reorder them.
         const shuffled = questions.map((q) => ({ ...q, options: shuffle(q.options) }))
-        setLoad({ kind: 'ready', questions: shuffled })
+        setLoad({ kind: 'ready', mode: game.mode, questions: shuffled })
       })
       .catch((error: unknown) => {
         if (!cancelled) setLoad({ kind: 'error', message: errorMessage(error) })
@@ -119,7 +140,7 @@ function PlayGame() {
     )
   }
 
-  const questions = load.questions
+  const { mode, questions } = load
   const total = questions.length
 
   if (total === 0) {
@@ -137,7 +158,7 @@ function PlayGame() {
     setStarting(true)
     setStartError(null)
     try {
-      const session = await startSession(gameId, playerName, PLAY_MODE)
+      const session = await startSession(gameId, playerName)
       setSessionId(session.session_id)
       setPhase('playing')
     } catch (error) {
@@ -167,13 +188,16 @@ function PlayGame() {
 
     const timeMs = Math.max(0, Math.round(performance.now() - shownAtRef.current))
     try {
-      const result = await sendAnswer(sessionId, questions[index].id, option, timeMs)
-      if (result.is_correct) setCorrectCount((count) => count + 1)
-      setFeedback(result.is_correct ? 'correct' : 'wrong')
-      nextTimerRef.current = setTimeout(goToNextQuestion, FEEDBACK_MS)
+      const { is_correct: isCorrect } = await sendAnswer(sessionId, questions[index].id, option, timeMs)
+      const result: Result = isCorrect ? 'correct' : 'wrong'
+      setResults((previous) => [...previous, result])
+      // Test mode keeps right/wrong hidden until the end: only a neutral note, and a shorter pause.
+      setFeedback(mode === 'test' ? 'saved' : result)
+      nextTimerRef.current = setTimeout(goToNextQuestion, mode === 'test' ? SAVED_MS : FEEDBACK_MS)
     } catch (error) {
       if (isAlreadyAnswered(error)) {
         // Saved on an earlier try; we don't know if it was right, so no message.
+        setResults((previous) => [...previous, 'unknown'])
         goToNextQuestion()
         return
       }
@@ -219,9 +243,11 @@ function PlayGame() {
   }
 
   if (phase === 'finished') {
+    const correctCount = results.filter((result) => result === 'correct').length
     return (
       <section className="card play-card play-finished">
         <p className="play-finished-text">{finishedText(correctCount, total)}</p>
+        {mode === 'test' && <TestResults questions={questions} results={results} />}
       </section>
     )
   }
@@ -264,7 +290,7 @@ function PlayGame() {
 
       <div role="status" aria-live="polite" className="play-feedback-slot">
         {feedback !== null && (
-          <p className={`play-feedback play-feedback-${feedback}`}>{FEEDBACK[feedback]}</p>
+          <p className={`play-feedback play-feedback-${feedback}`}>{feedbackText(feedback)}</p>
         )}
       </div>
       {answerError !== null && (
@@ -273,6 +299,27 @@ function PlayGame() {
         </p>
       )}
     </section>
+  )
+}
+
+/** Test mode end screen: each question with a mark for how it went. Never the correct answer. */
+function TestResults({ questions, results }: { questions: PlayQuestion[]; results: Result[] }) {
+  return (
+    <ol className="play-results" aria-label={PLAY_TEXT.resultsTitle}>
+      {questions.map((question, i) => {
+        const result = results[i] ?? 'unknown'
+        return (
+          <li key={question.id} className="play-result">
+            <span className="play-result-mark" role="img" aria-label={RESULT_LABEL[result]}>
+              {RESULT_MARK[result]}
+            </span>
+            <span dir="auto">
+              <PromptText prompt={question.prompt} />
+            </span>
+          </li>
+        )
+      })}
+    </ol>
   )
 }
 

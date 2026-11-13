@@ -1,14 +1,13 @@
 """Save and load games, play sessions and answers."""
 
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from app import questions
 from app.errors import DuplicateAnswerError, NotFoundError
 from app.grades import check_grade
 from app.models import Answer, Game, PlaySession, Question
-
-MODES = ("learning", "test")
+from app.modes import check_mode
 
 
 def save_game(
@@ -16,12 +15,14 @@ def save_game(
     subject: str,
     chapter: str,
     grade: int,
+    mode: str,
     game_questions: list[questions.Question],
 ) -> int:
     """Save a game and its questions in the given order. Returns the game id."""
     check_grade(grade)
+    check_mode(mode)
 
-    game = Game(subject=subject, chapter=chapter, grade=grade)
+    game = Game(subject=subject, chapter=chapter, grade=grade, mode=mode)
     db.add(game)
     db.flush()  # gives the game its id
     assert game.id is not None
@@ -39,27 +40,43 @@ def save_game(
     return game.id
 
 
+def get_game(db: Session, game_id: int) -> Game:
+    """The game with this id. Raises NotFoundError for an unknown game."""
+    game = db.get(Game, game_id)
+    if game is None:
+        raise NotFoundError(f"game {game_id} does not exist")
+    return game
+
+
 def get_questions(db: Session, game_id: int) -> list[Question]:
     """The questions of a game, in order. Raises NotFoundError for an unknown game."""
-    if db.get(Game, game_id) is None:
-        raise NotFoundError(f"game {game_id} does not exist")
+    get_game(db, game_id)
     statement = (
         select(Question).where(Question.game_id == game_id).order_by(Question.position)
     )
     return list(db.exec(statement))
 
 
-def start_session(db: Session, game_id: int, player_name: str, mode: str) -> int:
-    """Start a session of one child playing one game. Returns the session id."""
-    if db.get(Game, game_id) is None:
-        raise NotFoundError(f"game {game_id} does not exist")
-    if mode not in MODES:
-        raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+def count_questions(db: Session, game_id: int) -> int:
+    """How many questions a game has. Raises NotFoundError for an unknown game."""
+    get_game(db, game_id)
+    statement = (
+        select(func.count()).select_from(Question).where(Question.game_id == game_id)
+    )
+    return db.exec(statement).one()
+
+
+def start_session(db: Session, game_id: int, player_name: str) -> int:
+    """Start a session of one child playing one game. Returns the session id.
+
+    The session's mode comes from the game, never from the client.
+    """
+    game = get_game(db, game_id)
     name = player_name.strip()
     if not name:
         raise ValueError("player_name must not be empty")
 
-    session = PlaySession(game_id=game_id, player_name=name, mode=mode)
+    session = PlaySession(game_id=game_id, player_name=name, mode=game.mode)
     db.add(session)
     db.commit()
     assert session.id is not None

@@ -5,7 +5,14 @@ from sqlmodel import Session, select
 from app import questions, storage
 from app.errors import DuplicateAnswerError, NotFoundError
 from app.models import Answer, PlaySession
-from app.storage import get_questions, save_answer, save_game, start_session
+from app.storage import (
+    count_questions,
+    get_game,
+    get_questions,
+    save_answer,
+    save_game,
+    start_session,
+)
 
 
 def make_question(prompt: str, correct: str, wrong: list[str]) -> questions.Question:
@@ -27,11 +34,49 @@ QUESTIONS = [
 ]
 
 
-def new_game(db: Session) -> int:
-    return save_game(db, "math", "addition", 2, QUESTIONS)
+def new_game(db: Session, mode: str = "test") -> int:
+    return save_game(db, "math", "addition", 2, mode, QUESTIONS)
 
 
-# --- save_game / get_questions ---
+# --- save_game / get_game / get_questions / count_questions ---
+
+
+@pytest.mark.parametrize("mode", ["learning", "test"])
+def test_save_game_stores_subject_chapter_grade_and_mode(
+    db: Session, mode: str
+) -> None:
+    game = get_game(db, new_game(db, mode))
+
+    assert (game.subject, game.chapter, game.grade, game.mode) == (
+        "math",
+        "addition",
+        2,
+        mode,
+    )
+
+
+@pytest.mark.parametrize("mode", ["practice", ""])
+def test_save_game_rejects_unknown_mode(db: Session, mode: str) -> None:
+    with pytest.raises(ValueError, match="mode"):
+        save_game(db, "math", "addition", 2, mode, QUESTIONS)
+
+
+def test_get_game_of_unknown_game_is_not_found(db: Session) -> None:
+    with pytest.raises(NotFoundError, match="game 999"):
+        get_game(db, 999)
+
+
+def test_count_questions_counts_only_that_games_questions(db: Session) -> None:
+    first = new_game(db)
+    second = save_game(db, "english", "past tense", 3, "learning", [QUESTIONS[2]])
+
+    assert count_questions(db, first) == 3
+    assert count_questions(db, second) == 1
+
+
+def test_count_questions_of_unknown_game_is_not_found(db: Session) -> None:
+    with pytest.raises(NotFoundError, match="game"):
+        count_questions(db, 999)
 
 
 def test_save_game_keeps_questions_in_order_with_options(db: Session) -> None:
@@ -50,7 +95,7 @@ def test_save_game_keeps_questions_in_order_with_options(db: Session) -> None:
 
 def test_get_questions_returns_only_that_games_questions(db: Session) -> None:
     first = new_game(db)
-    second = save_game(db, "english", "past tense", 3, [QUESTIONS[2]])
+    second = save_game(db, "english", "past tense", 3, "test", [QUESTIONS[2]])
 
     assert len(get_questions(db, first)) == 3
     assert [q.prompt for q in get_questions(db, second)] == ["Past of go?"]
@@ -64,7 +109,7 @@ def test_get_questions_of_unknown_game_is_not_found(db: Session) -> None:
 @pytest.mark.parametrize("grade", [0, 4])
 def test_save_game_rejects_grade_outside_1_to_3(db: Session, grade: int) -> None:
     with pytest.raises(ValueError, match="grade"):
-        save_game(db, "math", "addition", grade, QUESTIONS)
+        save_game(db, "math", "addition", grade, "test", QUESTIONS)
 
 
 # --- start_session ---
@@ -73,25 +118,29 @@ def test_save_game_rejects_grade_outside_1_to_3(db: Session, grade: int) -> None
 def test_start_session_returns_new_ids(db: Session) -> None:
     game_id = new_game(db)
 
-    first = start_session(db, game_id, "Noa", "learning")
-    second = start_session(db, game_id, "Ari", "test")
+    first = start_session(db, game_id, "Noa")
+    second = start_session(db, game_id, "Ari")
 
     assert first != second
 
 
+@pytest.mark.parametrize("mode", ["learning", "test"])
+def test_start_session_takes_its_mode_from_the_game(db: Session, mode: str) -> None:
+    session_id = start_session(db, new_game(db, mode), "Noa")
+
+    saved = db.get(PlaySession, session_id)
+    assert saved is not None
+    assert saved.mode == mode
+
+
 def test_start_session_rejects_unknown_game(db: Session) -> None:
     with pytest.raises(NotFoundError, match="does not exist"):
-        start_session(db, 999, "Noa", "learning")
-
-
-def test_start_session_rejects_unknown_mode(db: Session) -> None:
-    with pytest.raises(ValueError, match="mode"):
-        start_session(db, new_game(db), "Noa", "practice")
+        start_session(db, 999, "Noa")
 
 
 def test_start_session_rejects_empty_name(db: Session) -> None:
     with pytest.raises(ValueError, match="player_name"):
-        start_session(db, new_game(db), "   ", "learning")
+        start_session(db, new_game(db), "   ")
 
 
 # --- save_answer ---
@@ -101,7 +150,7 @@ def test_start_session_rejects_empty_name(db: Session) -> None:
 def played(db: Session) -> tuple[int, list[int]]:
     """A started session and the ids of its game's questions."""
     game_id = new_game(db)
-    session_id = start_session(db, game_id, "Noa", "test")
+    session_id = start_session(db, game_id, "Noa")
     return session_id, [q.id for q in get_questions(db, game_id)]
 
 
@@ -157,7 +206,7 @@ def test_save_answer_rejects_question_from_another_game(
     db: Session, played: tuple[int, list[int]]
 ) -> None:
     session_id, _ = played
-    other_game = save_game(db, "english", "past tense", 1, [QUESTIONS[2]])
+    other_game = save_game(db, "english", "past tense", 1, "test", [QUESTIONS[2]])
     [other_question] = get_questions(db, other_game)
 
     with pytest.raises(ValueError, match="not part of"):
@@ -212,7 +261,7 @@ def test_same_question_can_be_answered_in_two_sessions(
 ) -> None:
     first_session, question_ids = played
     game_id = db.get(PlaySession, first_session).game_id
-    second_session = start_session(db, game_id, "Ari", "test")
+    second_session = start_session(db, game_id, "Ari")
 
     save_answer(db, first_session, question_ids[0], "12", 1000)
     save_answer(db, second_session, question_ids[0], "11", 1000)
