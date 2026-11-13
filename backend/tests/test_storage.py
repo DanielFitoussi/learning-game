@@ -1,8 +1,10 @@
 import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from app import questions
-from app.models import Answer
+from app import questions, storage
+from app.errors import DuplicateAnswerError, NotFoundError
+from app.models import Answer, PlaySession
 from app.storage import get_questions, save_answer, save_game, start_session
 
 
@@ -54,8 +56,9 @@ def test_get_questions_returns_only_that_games_questions(db: Session) -> None:
     assert [q.prompt for q in get_questions(db, second)] == ["Past of go?"]
 
 
-def test_get_questions_of_unknown_game_is_empty(db: Session) -> None:
-    assert get_questions(db, 999) == []
+def test_get_questions_of_unknown_game_is_not_found(db: Session) -> None:
+    with pytest.raises(NotFoundError, match="game"):
+        get_questions(db, 999)
 
 
 @pytest.mark.parametrize("grade", [0, 4])
@@ -77,7 +80,7 @@ def test_start_session_returns_new_ids(db: Session) -> None:
 
 
 def test_start_session_rejects_unknown_game(db: Session) -> None:
-    with pytest.raises(ValueError, match="does not exist"):
+    with pytest.raises(NotFoundError, match="does not exist"):
         start_session(db, 999, "Noa", "learning")
 
 
@@ -166,7 +169,7 @@ def test_save_answer_rejects_unknown_session(
 ) -> None:
     _, question_ids = played
 
-    with pytest.raises(ValueError, match="session"):
+    with pytest.raises(NotFoundError, match="session"):
         save_answer(db, 999, question_ids[0], "12", 1000)
 
 
@@ -175,7 +178,7 @@ def test_save_answer_rejects_unknown_question(
 ) -> None:
     session_id, _ = played
 
-    with pytest.raises(ValueError, match="question"):
+    with pytest.raises(NotFoundError, match="question"):
         save_answer(db, session_id, 999, "12", 1000)
 
 
@@ -186,3 +189,68 @@ def test_save_answer_rejects_negative_time(
 
     with pytest.raises(ValueError, match="time_ms"):
         save_answer(db, session_id, question_ids[0], "12", -1)
+
+
+# --- answering a question twice ---
+
+
+def test_save_answer_rejects_second_answer_to_same_question(
+    db: Session, played: tuple[int, list[int]]
+) -> None:
+    session_id, question_ids = played
+    save_answer(db, session_id, question_ids[0], "12", 1000)
+
+    with pytest.raises(DuplicateAnswerError, match="already answered"):
+        save_answer(db, session_id, question_ids[0], "11", 300)
+
+    [answer] = saved_answers(db)
+    assert answer.chosen_text == "12"
+
+
+def test_same_question_can_be_answered_in_two_sessions(
+    db: Session, played: tuple[int, list[int]]
+) -> None:
+    first_session, question_ids = played
+    game_id = db.get(PlaySession, first_session).game_id
+    second_session = start_session(db, game_id, "Ari", "test")
+
+    save_answer(db, first_session, question_ids[0], "12", 1000)
+    save_answer(db, second_session, question_ids[0], "11", 1000)
+
+    assert len(saved_answers(db)) == 2
+
+
+def test_unique_constraint_blocks_duplicate_answer_rows(
+    db: Session, played: tuple[int, list[int]]
+) -> None:
+    """The database itself refuses a second row, even without save_answer."""
+    session_id, question_ids = played
+
+    def row() -> Answer:
+        return Answer(
+            session_id=session_id,
+            question_id=question_ids[0],
+            chosen_text="12",
+            is_correct=True,
+            time_ms=1000,
+        )
+
+    db.add(row())
+    db.commit()
+    db.add(row())
+    with pytest.raises(IntegrityError):
+        db.commit()
+
+
+def test_save_answer_turns_constraint_error_into_duplicate_error(
+    db: Session, played: tuple[int, list[int]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two requests at the same moment both pass the read check; the constraint wins."""
+    session_id, question_ids = played
+    save_answer(db, session_id, question_ids[0], "12", 1000)
+    monkeypatch.setattr(storage, "has_answer", lambda *args: False)
+
+    with pytest.raises(DuplicateAnswerError, match="already answered"):
+        save_answer(db, session_id, question_ids[0], "11", 300)
+
+    assert len(saved_answers(db)) == 1

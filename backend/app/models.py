@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlmodel import JSON, Column, Field, SQLModel
+from sqlmodel import JSON, Column, Field, SQLModel, UniqueConstraint
 
 
 def utc_now() -> datetime:
@@ -49,7 +49,16 @@ class PlaySession(SQLModel, table=True):
 
 
 class Answer(SQLModel, table=True):
-    """One answer a child gave to one question during a session."""
+    """One answer a child gave to one question during a session.
+
+    A session can answer each question only once.
+    """
+
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "question_id", name="uq_answer_session_question"
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     session_id: int = Field(foreign_key="session.id", index=True)

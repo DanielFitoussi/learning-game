@@ -1,8 +1,10 @@
 """Save and load games, play sessions and answers."""
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app import questions
+from app.errors import DuplicateAnswerError, NotFoundError
 from app.grades import check_grade
 from app.models import Answer, Game, PlaySession, Question
 
@@ -38,7 +40,9 @@ def save_game(
 
 
 def get_questions(db: Session, game_id: int) -> list[Question]:
-    """The questions of a game, in order."""
+    """The questions of a game, in order. Raises NotFoundError for an unknown game."""
+    if db.get(Game, game_id) is None:
+        raise NotFoundError(f"game {game_id} does not exist")
     statement = (
         select(Question).where(Question.game_id == game_id).order_by(Question.position)
     )
@@ -48,7 +52,7 @@ def get_questions(db: Session, game_id: int) -> list[Question]:
 def start_session(db: Session, game_id: int, player_name: str, mode: str) -> int:
     """Start a session of one child playing one game. Returns the session id."""
     if db.get(Game, game_id) is None:
-        raise ValueError(f"game {game_id} does not exist")
+        raise NotFoundError(f"game {game_id} does not exist")
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
     name = player_name.strip()
@@ -74,19 +78,29 @@ def find_option(options: list[dict], chosen_text: str) -> dict | None:
     )
 
 
+def has_answer(db: Session, session_id: int, question_id: int) -> bool:
+    """True if the session has already answered the question."""
+    statement = select(Answer.id).where(
+        Answer.session_id == session_id, Answer.question_id == question_id
+    )
+    return db.exec(statement).first() is not None
+
+
 def save_answer(
     db: Session, session_id: int, question_id: int, chosen_text: str, time_ms: int
 ) -> bool:
     """Save a child's answer. is_correct is worked out here, never taken from the client.
 
-    Returns whether the answer was correct.
+    Returns whether the answer was correct. Raises NotFoundError for an unknown
+    session or question, DuplicateAnswerError if the question was already
+    answered in this session, and ValueError for other bad input.
     """
     session = db.get(PlaySession, session_id)
     if session is None:
-        raise ValueError(f"session {session_id} does not exist")
+        raise NotFoundError(f"session {session_id} does not exist")
     question = db.get(Question, question_id)
     if question is None:
-        raise ValueError(f"question {question_id} does not exist")
+        raise NotFoundError(f"question {question_id} does not exist")
     if question.game_id != session.game_id:
         raise ValueError(f"question {question_id} is not part of this session's game")
     if time_ms < 0:
@@ -95,6 +109,11 @@ def save_answer(
     option = find_option(question.options, chosen_text)
     if option is None:
         raise ValueError(f"{chosen_text!r} is not one of the question's options")
+
+    already_answered = f"question {question_id} was already answered in this session"
+    # Checking first gives a clear error in the usual case, like a double click.
+    if has_answer(db, session_id, question_id):
+        raise DuplicateAnswerError(already_answered)
 
     is_correct = bool(option["is_correct"])
     db.add(
@@ -106,5 +125,12 @@ def save_answer(
             time_ms=time_ms,
         )
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as error:
+        # Two requests at the same moment can both pass the check above; the
+        # unique constraint stops the second. The session and question were
+        # checked above, so this constraint is the only one that can fail here.
+        db.rollback()
+        raise DuplicateAnswerError(already_answered) from error
     return is_correct

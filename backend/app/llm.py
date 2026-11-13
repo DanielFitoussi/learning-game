@@ -1,7 +1,7 @@
 """The only module that talks to OpenAI.
 
 To swap the AI provider, write another class with the same complete_json
-method (the TextModel protocol in app/generation.py) and use it instead.
+method (the TextModel protocol in app/text_model.py) and use it instead.
 """
 
 import os

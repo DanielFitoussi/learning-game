@@ -8,26 +8,28 @@ import logging
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from functools import cache
-from typing import Annotated
+from typing import Annotated, Literal
 
 import openai
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 from sqlalchemy import Engine
 from sqlmodel import Session
 
 from app.db import create_tables, database_url, make_engine
-from app.errors import GenerationError
+from app.errors import DuplicateAnswerError, GenerationError, NotFoundError
 from app.generation import MAX_MATERIAL_CHARS, MAX_QUESTIONS, generate_questions
 from app.grades import check_grade
 from app.llm import OpenAITextModel
 from app.questions import NonEmptyStr
-from app.storage import save_game
+from app.storage import get_questions, save_answer, save_game, start_session
 from app.text_model import TextModel
 
 logger = logging.getLogger(__name__)
+
+MAX_PLAYER_NAME_CHARS = 40
 
 DEFAULT_COUNT = 5
 GENERATION_FAILED = "Could not create questions from this material. Please try again."
@@ -109,6 +111,29 @@ async def handle_generation_failure(request: Request, error: Exception) -> JSONR
     )
 
 
+@app.exception_handler(NotFoundError)
+async def handle_not_found(request: Request, error: NotFoundError) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND, content={"detail": str(error)}
+    )
+
+
+@app.exception_handler(DuplicateAnswerError)
+async def handle_duplicate_answer(
+    request: Request, error: DuplicateAnswerError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT, content={"detail": str(error)}
+    )
+
+
+def bad_input(error: ValueError) -> HTTPException:
+    """A 422 with the error's short message."""
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+    )
+
+
 # --- POST /games -----------------------------------------------------------------
 
 
@@ -160,9 +185,7 @@ def create_game(
             grade=body.grade,
         )
     except ValueError as error:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
-        ) from error
+        raise bad_input(error) from error
 
     game_id = save_game(db, body.subject, body.chapter, body.grade, result.questions)
     return CreateGameResponse(
@@ -170,3 +193,95 @@ def create_game(
         question_count=len(result.questions),
         rejected=result.rejected,
     )
+
+
+# --- POST /games/{game_id}/sessions ----------------------------------------------
+
+PlayerName = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=MAX_PLAYER_NAME_CHARS
+    ),
+]
+
+
+class StartSessionRequest(BaseModel):
+    player_name: PlayerName
+    mode: Literal["learning", "test"]
+
+
+class StartSessionResponse(BaseModel):
+    session_id: int
+
+
+@app.post(
+    "/games/{game_id}/sessions",
+    status_code=status.HTTP_201_CREATED,
+    response_model=StartSessionResponse,
+)
+def create_session(
+    game_id: int, body: StartSessionRequest, db: DbSession
+) -> StartSessionResponse:
+    """Start a session of one child playing one game."""
+    try:
+        session_id = start_session(db, game_id, body.player_name, body.mode)
+    except ValueError as error:
+        raise bad_input(error) from error
+    return StartSessionResponse(session_id=session_id)
+
+
+# --- GET /games/{game_id}/questions ----------------------------------------------
+
+
+class PlayQuestion(BaseModel):
+    """A question as the child sees it: option texts only, never which is correct."""
+
+    id: int
+    prompt: str
+    options: list[str]
+
+
+@app.get("/games/{game_id}/questions", response_model=list[PlayQuestion])
+def list_questions(game_id: int, db: DbSession) -> list[PlayQuestion]:
+    """The game's questions in order."""
+    return [
+        PlayQuestion(
+            id=question.id,
+            prompt=question.prompt,
+            options=[option["text"] for option in question.options],
+        )
+        for question in get_questions(db, game_id)
+    ]
+
+
+# --- POST /sessions/{session_id}/answers -----------------------------------------
+
+
+class AnswerRequest(BaseModel):
+    question_id: int
+    chosen_text: str
+    time_ms: int = Field(ge=0)
+
+
+class AnswerResponse(BaseModel):
+    """Only whether the answer was right. The correct answer is never sent."""
+
+    is_correct: bool
+
+
+@app.post(
+    "/sessions/{session_id}/answers",
+    status_code=status.HTTP_201_CREATED,
+    response_model=AnswerResponse,
+)
+def answer_question(
+    session_id: int, body: AnswerRequest, db: DbSession
+) -> AnswerResponse:
+    """Save a child's answer to one question."""
+    try:
+        is_correct = save_answer(
+            db, session_id, body.question_id, body.chosen_text, body.time_ms
+        )
+    except ValueError as error:
+        raise bad_input(error) from error
+    return AnswerResponse(is_correct=is_correct)

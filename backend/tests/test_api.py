@@ -12,8 +12,9 @@ from sqlmodel import Session, select
 
 from app.api import GENERATION_FAILED, app, get_db, get_engine, get_text_model
 from app.generation import MAX_MATERIAL_CHARS, MAX_QUESTIONS
-from app.models import Game
-from app.storage import get_questions
+from app.models import Answer, Game, PlaySession
+from app.questions import Question
+from app.storage import get_questions, save_game
 
 # --- Helpers -------------------------------------------------------------------
 
@@ -252,3 +253,239 @@ def test_startup_creates_the_tables(
         get_engine.cache_clear()
 
     assert {"game", "question", "session", "answer"} <= tables
+
+
+# --- Playing a game --------------------------------------------------------------
+
+
+def make_game(engine: Engine, count: int = 3) -> int:
+    """Save a game straight to the database, without the model."""
+    game_questions = [
+        Question.model_validate(question_dict(n)) for n in range(1, count + 1)
+    ]
+    with Session(engine) as session:
+        return save_game(session, "math", "addition", 2, game_questions)
+
+
+def question_ids(client: TestClient, game_id: int) -> list[int]:
+    return [q["id"] for q in client.get(f"/games/{game_id}/questions").json()]
+
+
+def new_session(client: TestClient, game_id: int) -> int:
+    body = {"player_name": "Noa", "mode": "test"}
+    response = client.post(f"/games/{game_id}/sessions", json=body)
+    assert response.status_code == 201
+    return response.json()["session_id"]
+
+
+def saved_answers(engine: Engine) -> list[Answer]:
+    with Session(engine) as session:
+        return list(session.exec(select(Answer)))
+
+
+def answer(question_id: int, chosen_text: str, time_ms: int = 1200) -> dict[str, Any]:
+    return {"question_id": question_id, "chosen_text": chosen_text, "time_ms": time_ms}
+
+
+# POST /games/{game_id}/sessions
+
+
+def test_start_session_returns_201_and_saves_trimmed_name(
+    client: TestClient, engine: Engine
+) -> None:
+    game_id = make_game(engine)
+
+    response = client.post(
+        f"/games/{game_id}/sessions", json={"player_name": "  Noa ", "mode": "learning"}
+    )
+
+    assert response.status_code == 201
+    session_id = response.json()["session_id"]
+    with Session(engine) as session:
+        saved = session.get(PlaySession, session_id)
+    assert saved is not None
+    assert (saved.game_id, saved.player_name, saved.mode) == (
+        game_id,
+        "Noa",
+        "learning",
+    )
+
+
+def test_start_session_accepts_a_40_character_name(
+    client: TestClient, engine: Engine
+) -> None:
+    body = {"player_name": "a" * 40, "mode": "test"}
+    response = client.post(f"/games/{make_game(engine)}/sessions", json=body)
+    assert response.status_code == 201
+
+
+def test_start_session_for_unknown_game_is_404(client: TestClient) -> None:
+    body = {"player_name": "Noa", "mode": "test"}
+    response = client.post("/games/999/sessions", json=body)
+
+    assert response.status_code == 404
+    assert "game 999" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("body", "field"),
+    [
+        ({"player_name": "", "mode": "test"}, "player_name"),
+        ({"player_name": "   ", "mode": "test"}, "player_name"),
+        ({"player_name": "a" * 41, "mode": "test"}, "player_name"),
+        ({"player_name": "Noa", "mode": "practice"}, "mode"),
+    ],
+)
+def test_start_session_rejects_bad_input(
+    client: TestClient, engine: Engine, body: dict[str, Any], field: str
+) -> None:
+    response = client.post(f"/games/{make_game(engine)}/sessions", json=body)
+
+    assert response.status_code == 422
+    assert response.json()["detail"].startswith(f"{field}:")
+
+
+# GET /games/{game_id}/questions
+
+
+def test_get_questions_returns_option_texts_in_order(
+    client: TestClient, engine: Engine
+) -> None:
+    game_id = make_game(engine, count=2)
+
+    response = client.get(f"/games/{game_id}/questions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [q["prompt"] for q in body] == ["כמה זה 1 + 5?", "כמה זה 2 + 5?"]
+    assert body[0]["options"] == ["6", "15", "5"]
+    assert set(body[0]) == {"id", "prompt", "options"}
+
+
+def test_get_questions_never_sends_is_correct(
+    client: TestClient, engine: Engine
+) -> None:
+    response = client.get(f"/games/{make_game(engine)}/questions")
+
+    assert response.status_code == 200
+    assert "is_correct" not in response.text
+
+
+def test_get_questions_of_unknown_game_is_404(client: TestClient) -> None:
+    response = client.get("/games/999/questions")
+
+    assert response.status_code == 404
+    assert "game 999" in response.json()["detail"]
+
+
+# POST /sessions/{session_id}/answers
+
+
+def test_correct_answer_returns_201_and_is_correct_only(
+    client: TestClient, engine: Engine
+) -> None:
+    game_id = make_game(engine)
+    session_id = new_session(client, game_id)
+    first = question_ids(client, game_id)[0]
+
+    response = client.post(f"/sessions/{session_id}/answers", json=answer(first, "6"))
+
+    assert response.status_code == 201
+    assert response.json() == {"is_correct": True}
+    [saved] = saved_answers(engine)
+    assert (saved.session_id, saved.question_id, saved.time_ms) == (
+        session_id,
+        first,
+        1200,
+    )
+
+
+def test_wrong_answer_does_not_reveal_the_correct_one(
+    client: TestClient, engine: Engine
+) -> None:
+    game_id = make_game(engine)
+    session_id = new_session(client, game_id)
+    first = question_ids(client, game_id)[0]
+
+    response = client.post(f"/sessions/{session_id}/answers", json=answer(first, "5"))
+
+    assert response.status_code == 201
+    assert response.json() == {"is_correct": False}
+
+
+def test_second_answer_to_same_question_is_409_and_not_saved(
+    client: TestClient, engine: Engine
+) -> None:
+    game_id = make_game(engine)
+    session_id = new_session(client, game_id)
+    first = question_ids(client, game_id)[0]
+    url = f"/sessions/{session_id}/answers"
+
+    client.post(url, json=answer(first, "6"))
+    response = client.post(url, json=answer(first, "5"))
+
+    assert response.status_code == 409
+    assert "already answered" in response.json()["detail"]
+    [saved] = saved_answers(engine)
+    assert saved.chosen_text == "6"
+
+
+def test_answer_for_unknown_session_is_404(client: TestClient, engine: Engine) -> None:
+    first = question_ids(client, make_game(engine))[0]
+
+    response = client.post("/sessions/999/answers", json=answer(first, "6"))
+
+    assert response.status_code == 404
+    assert "session 999" in response.json()["detail"]
+
+
+def test_answer_for_unknown_question_is_404(client: TestClient, engine: Engine) -> None:
+    session_id = new_session(client, make_game(engine))
+
+    response = client.post(f"/sessions/{session_id}/answers", json=answer(999, "6"))
+
+    assert response.status_code == 404
+    assert "question 999" in response.json()["detail"]
+
+
+def test_answer_with_question_from_another_game_is_422(
+    client: TestClient, engine: Engine
+) -> None:
+    session_id = new_session(client, make_game(engine))
+    other_question = question_ids(client, make_game(engine))[0]
+
+    response = client.post(
+        f"/sessions/{session_id}/answers", json=answer(other_question, "6")
+    )
+
+    assert response.status_code == 422
+    assert "not part of" in response.json()["detail"]
+    assert saved_answers(engine) == []
+
+
+def test_answer_that_is_not_an_option_is_422(
+    client: TestClient, engine: Engine
+) -> None:
+    game_id = make_game(engine)
+    session_id = new_session(client, game_id)
+    first = question_ids(client, game_id)[0]
+
+    response = client.post(f"/sessions/{session_id}/answers", json=answer(first, "99"))
+
+    assert response.status_code == 422
+    assert "not one of" in response.json()["detail"]
+    assert saved_answers(engine) == []
+
+
+def test_answer_with_negative_time_is_422(client: TestClient, engine: Engine) -> None:
+    game_id = make_game(engine)
+    session_id = new_session(client, game_id)
+    first = question_ids(client, game_id)[0]
+
+    response = client.post(
+        f"/sessions/{session_id}/answers", json=answer(first, "6", time_ms=-1)
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"].startswith("time_ms:")
+    assert saved_answers(engine) == []
