@@ -1,8 +1,16 @@
-"""Errors shared by the generation steps.
+"""Errors shared by several modules.
 
-GenerationError lives in its own module so that other modules can use it.
+They live in their own module so that any module can raise or catch them.
 """
 
 
 class GenerationError(Exception):
     """The model's reply could not be turned into a valid result."""
+
+
+class NotFoundError(Exception):
+    """A game, session or question that does not exist."""
+
+
+class DuplicateAnswerError(Exception):
+    """The session has already answered this question."""
