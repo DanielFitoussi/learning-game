@@ -2,10 +2,14 @@
 
 export type Grade = 1 | 2 | 3
 
+/** How a game is played: "learning" shows right/wrong after each answer, "test" only at the end. */
+export type GameMode = 'learning' | 'test'
+
 export type CreateGameRequest = {
   subject: string
   chapter: string
   grade: Grade
+  mode: GameMode
   material: string
   count: number
 }
@@ -16,7 +20,14 @@ export type CreateGameResponse = {
   rejected: number
 }
 
-export type PlayMode = 'learning' | 'test'
+/** What a game is about and how it is played. No questions or answers. */
+export type GameInfo = {
+  subject: string
+  chapter: string
+  grade: Grade
+  mode: GameMode
+  question_count: number
+}
 
 export type StartSessionResponse = {
   session_id: number
@@ -90,15 +101,15 @@ export function createGame(request: CreateGameRequest): Promise<CreateGameRespon
   return postJson<CreateGameResponse>('/api/games', request)
 }
 
-/** Start a session of one child playing one game. */
-export function startSession(
-  gameId: number,
-  playerName: string,
-  mode: PlayMode,
-): Promise<StartSessionResponse> {
+/** The game's details, including the mode its creator picked. */
+export function getGame(gameId: number): Promise<GameInfo> {
+  return requestJson<GameInfo>(`/api/games/${gameId}`)
+}
+
+/** Start a session of one child playing one game. The mode comes from the game. */
+export function startSession(gameId: number, playerName: string): Promise<StartSessionResponse> {
   return postJson<StartSessionResponse>(`/api/games/${gameId}/sessions`, {
     player_name: playerName,
-    mode,
   })
 }
 

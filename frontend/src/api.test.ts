@@ -3,6 +3,7 @@ import {
   ApiError,
   MESSAGES,
   createGame,
+  getGame,
   getQuestions,
   messageForStatus,
   sendAnswer,
@@ -14,6 +15,7 @@ const REQUEST: CreateGameRequest = {
   subject: 'מדעים',
   chapter: 'מחזור המים',
   grade: 2,
+  mode: 'test',
   material: 'המים מתאדים מהים ויורדים כגשם.',
   count: 5,
 }
@@ -39,12 +41,13 @@ describe('messageForStatus', () => {
 })
 
 describe('createGame', () => {
-  it('posts the request to /api/games and returns the new game', async () => {
+  it('posts the request, including the mode, to /api/games and returns the new game', async () => {
     const body = { game_id: 7, question_count: 5, rejected: 0 }
     const fetchMock = vi.fn().mockResolvedValue(fakeResponse(201, body))
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(createGame(REQUEST)).resolves.toEqual(body)
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toMatchObject({ mode: 'test' })
 
     expect(fetchMock).toHaveBeenCalledWith('/api/games', {
       method: 'POST',
@@ -73,24 +76,51 @@ describe('createGame', () => {
   })
 })
 
+describe('getGame', () => {
+  it('gets the details of the game, including its mode', async () => {
+    const game = { subject: 'חשבון', chapter: 'חיבור', grade: 1, mode: 'test', question_count: 4 }
+    const fetchMock = vi.fn().mockResolvedValue(fakeResponse(200, game))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getGame(7)).resolves.toEqual(game)
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/games/7', undefined)
+  })
+
+  it('throws the not-found message for a missing game', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fakeResponse(404)))
+
+    const error = await getGame(99).catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error).toMatchObject({ message: MESSAGES.gameNotFound, status: 404 })
+  })
+
+  it('throws the server-down message when the server cannot be reached', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+
+    await expect(getGame(7)).rejects.toThrow(MESSAGES.serverDown)
+  })
+})
+
 describe('startSession', () => {
-  it('posts the name and mode to the game and returns the session', async () => {
+  it('posts only the name to the game and returns the session', async () => {
     const fetchMock = vi.fn().mockResolvedValue(fakeResponse(201, { session_id: 3 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(startSession(7, 'נועה', 'learning')).resolves.toEqual({ session_id: 3 })
+    await expect(startSession(7, 'נועה')).resolves.toEqual({ session_id: 3 })
 
     expect(fetchMock).toHaveBeenCalledWith('/api/games/7/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ player_name: 'נועה', mode: 'learning' }),
+      body: JSON.stringify({ player_name: 'נועה' }),
     })
   })
 
   it('throws the not-found message for a missing game', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fakeResponse(404)))
 
-    await expect(startSession(99, 'נועה', 'learning')).rejects.toThrow(MESSAGES.gameNotFound)
+    await expect(startSession(99, 'נועה')).rejects.toThrow(MESSAGES.gameNotFound)
   })
 })
 

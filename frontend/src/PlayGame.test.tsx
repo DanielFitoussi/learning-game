@@ -1,9 +1,18 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MESSAGES, type PlayQuestion } from './api.ts'
+import { MESSAGES, type GameMode, type PlayQuestion } from './api.ts'
 import PlayGame from './PlayGame.tsx'
-import { FEEDBACK, FEEDBACK_MS, PLAY_TEXT, finishedText, progressText } from './playSettings.ts'
+import {
+  FEEDBACK,
+  FEEDBACK_MS,
+  PLAY_TEXT,
+  RESULT_LABEL,
+  SAVED_MS,
+  SAVED_TEXT,
+  finishedText,
+  progressText,
+} from './playSettings.ts'
 
 const QUESTIONS: PlayQuestion[] = [
   { id: 11, prompt: '2 + 2', options: ['4', '5', '6'] },
@@ -19,9 +28,16 @@ function fakeResponse(status: number, body: unknown = {}): Response {
 
 type Handler = (url: string, init?: RequestInit) => Promise<Response>
 
-/** A fake backend for questions, sessions and answers, with optional overrides. */
-function fakeBackend(overrides: { answer?: Handler; questions?: Handler } = {}) {
+type BackendOptions = { mode?: GameMode; game?: Handler; answer?: Handler; questions?: Handler }
+
+/** A fake backend for the game, questions, sessions and answers, with optional overrides. */
+function fakeBackend(overrides: BackendOptions = {}) {
+  const mode = overrides.mode ?? 'learning'
   return vi.fn(async (url: string, init?: RequestInit): Promise<Response> => {
+    if (/\/api\/games\/\d+$/.test(url)) {
+      if (overrides.game) return overrides.game(url, init)
+      return fakeResponse(200, { subject: 'חשבון', chapter: 'חיבור', grade: 1, mode, question_count: 2 })
+    }
     if (url.endsWith('/questions')) {
       return overrides.questions ? overrides.questions(url, init) : fakeResponse(200, QUESTIONS)
     }
@@ -71,6 +87,32 @@ async function answer(text: string, feedback: string): Promise<void> {
   })
 }
 
+/** Test mode: click an option, wait for the neutral note, then skip its short pause. */
+async function answerInTest(text: string): Promise<void> {
+  fireEvent.click(screen.getByRole('button', { name: text }))
+  await screen.findByText(SAVED_TEXT)
+  act(() => {
+    vi.advanceTimersByTime(SAVED_MS)
+  })
+}
+
+/** Fake browser speech, so tests can see everything that is spoken. */
+function stubSpeech() {
+  const synth = { speak: vi.fn(), cancel: vi.fn() }
+  vi.stubGlobal('speechSynthesis', synth)
+  vi.stubGlobal(
+    'SpeechSynthesisUtterance',
+    class {
+      text: string
+      lang = ''
+      constructor(text: string) {
+        this.text = text
+      }
+    },
+  )
+  return synth
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true })
 })
@@ -82,7 +124,7 @@ afterEach(() => {
 })
 
 describe('PlayGame', () => {
-  it('starts a learning session with the trimmed name', async () => {
+  it('loads the game and starts a session with only the trimmed name', async () => {
     const fetchMock = fakeBackend()
     vi.stubGlobal('fetch', fetchMock)
     renderPlay()
@@ -91,7 +133,8 @@ describe('PlayGame', () => {
 
     const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/sessions'))!
     expect(call[0]).toBe('/api/games/7/sessions')
-    expect(JSON.parse(call[1]!.body as string)).toEqual({ player_name: 'נועה', mode: 'learning' })
+    expect(JSON.parse(call[1]!.body as string)).toEqual({ player_name: 'נועה' })
+    expect(fetchMock.mock.calls.some(([url]) => url === '/api/games/7')).toBe(true)
   })
 
   it('keeps the start button disabled until a name is typed', async () => {
@@ -216,6 +259,14 @@ describe('PlayGame', () => {
     expect(screen.queryByLabelText(PLAY_TEXT.nameLabel)).not.toBeInTheDocument()
   })
 
+  it('shows the not-found message when the game details are missing (404)', async () => {
+    vi.stubGlobal('fetch', fakeBackend({ game: async () => fakeResponse(404) }))
+    renderPlay('99')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(MESSAGES.gameNotFound)
+    expect(screen.queryByLabelText(PLAY_TEXT.nameLabel)).not.toBeInTheDocument()
+  })
+
   it('shows the not-found message for a game ID that is not a number', async () => {
     const fetchMock = fakeBackend()
     vi.stubGlobal('fetch', fetchMock)
@@ -237,18 +288,7 @@ describe('PlayGame', () => {
   })
 
   it('reads the question aloud in Hebrew when speech exists', async () => {
-    const synth = { speak: vi.fn(), cancel: vi.fn() }
-    vi.stubGlobal('speechSynthesis', synth)
-    vi.stubGlobal(
-      'SpeechSynthesisUtterance',
-      class {
-        text: string
-        lang = ''
-        constructor(text: string) {
-          this.text = text
-        }
-      },
-    )
+    const synth = stubSpeech()
     vi.stubGlobal('fetch', fakeBackend())
     renderPlay()
     await startAs('נועה')
@@ -288,5 +328,109 @@ describe('PlayGame', () => {
 
     const heading = await screen.findByRole('heading', { name: 'פִּתְרוּ: 7 + 5 = ?' })
     expect(heading.querySelector('bdi')).toHaveTextContent(/^7 \+ 5 = \?$/)
+  })
+})
+
+describe('PlayGame in test mode', () => {
+  it('shows a neutral note after an answer, with no right/wrong, then moves on quickly', async () => {
+    vi.stubGlobal('fetch', fakeBackend({ mode: 'test' }))
+    renderPlay()
+    await startAs('נועה')
+
+    fireEvent.click(screen.getByRole('button', { name: '5' }))
+    const note = await screen.findByText(SAVED_TEXT)
+
+    expect(note).toHaveClass('play-feedback-saved')
+    expect(note).not.toHaveClass('play-feedback-correct')
+    expect(note).not.toHaveClass('play-feedback-wrong')
+    expect(screen.queryByText(FEEDBACK.correct)).not.toBeInTheDocument()
+    expect(screen.queryByText(FEEDBACK.wrong)).not.toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(SAVED_MS)
+    })
+    expect(screen.getByText(progressText(2, 2))).toBeInTheDocument()
+  })
+
+  it('speaks only the question the child asks to hear, never right or wrong', async () => {
+    const synth = stubSpeech()
+    vi.stubGlobal('fetch', fakeBackend({ mode: 'test' }))
+    renderPlay()
+    await startAs('נועה')
+
+    await answerInTest('4')
+    expect(synth.speak).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: PLAY_TEXT.readAloud }))
+    await answerInTest('3')
+
+    expect(screen.getByText(finishedText(1, 2))).toBeInTheDocument()
+    expect(synth.speak).toHaveBeenCalledTimes(1)
+    expect(synth.speak).toHaveBeenCalledWith(expect.objectContaining({ text: '5 פחות 3', lang: 'he-IL' }))
+  })
+
+  it('shows the score and a mark per question at the end, never the correct answers', async () => {
+    vi.stubGlobal('fetch', fakeBackend({ mode: 'test' }))
+    renderPlay()
+    await startAs('נועה')
+
+    await answerInTest('4')
+    await answerInTest('3')
+
+    expect(screen.getByText(finishedText(1, 2))).toBeInTheDocument()
+    const items = within(screen.getByRole('list', { name: PLAY_TEXT.resultsTitle })).getAllByRole('listitem')
+    expect(items).toHaveLength(2)
+    expect(items[0]).toHaveTextContent('✅')
+    expect(items[0]).toHaveTextContent('2 + 2')
+    expect(within(items[0]).getByRole('img')).toHaveAccessibleName(RESULT_LABEL.correct)
+    expect(items[1]).toHaveTextContent('❌')
+    expect(items[1]).toHaveTextContent('5 - 3')
+    expect(within(items[1]).getByRole('img')).toHaveAccessibleName(RESULT_LABEL.wrong)
+    // The right answer to "5 - 3" is "2"; it must not appear anywhere.
+    expect(screen.queryByText('2')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  })
+
+  it('sends only one answer on a double click', async () => {
+    const fetchMock = fakeBackend({ mode: 'test' })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPlay()
+    await startAs('נועה')
+
+    const button = screen.getByRole('button', { name: '4' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    fireEvent.click(screen.getByRole('button', { name: '5' }))
+
+    await screen.findByText(SAVED_TEXT)
+    expect(answerCalls(fetchMock)).toHaveLength(1)
+    for (const text of ['4', '5', '6']) {
+      expect(screen.getByRole('button', { name: text })).toBeDisabled()
+    }
+  })
+
+  it('moves on after a 409 and marks that question as unknown at the end', async () => {
+    let calls = 0
+    vi.stubGlobal(
+      'fetch',
+      fakeBackend({
+        mode: 'test',
+        answer: async () => {
+          calls += 1
+          return calls === 1 ? fakeResponse(201, { is_correct: true }) : fakeResponse(409)
+        },
+      }),
+    )
+    renderPlay()
+    await startAs('נועה')
+
+    await answerInTest('4')
+    fireEvent.click(screen.getByRole('button', { name: '2' }))
+
+    expect(await screen.findByText(finishedText(1, 2))).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    const items = screen.getAllByRole('listitem')
+    expect(items[1]).toHaveTextContent('—')
+    expect(within(items[1]).getByRole('img')).toHaveAccessibleName(RESULT_LABEL.unknown)
   })
 })

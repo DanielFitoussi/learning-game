@@ -1,9 +1,18 @@
 import { useEffect, useState, type CSSProperties, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { ApiError, MESSAGES, createGame, type CreateGameResponse, type Grade } from './api.ts'
+import {
+  ApiError,
+  MESSAGES,
+  createGame,
+  type CreateGameResponse,
+  type GameMode,
+  type Grade,
+} from './api.ts'
 import {
   LOADING_TEXT,
   MAX_MATERIAL_CHARS,
+  MODE_LEGEND,
+  MODE_OPTIONS,
   STATUS_INTERVAL_MS,
   STATUS_LINES,
 } from './createGameSettings.ts'
@@ -29,15 +38,18 @@ function CreateGame() {
   const [grade, setGrade] = useState<Grade>(1)
   const [count, setCount] = useState(DEFAULT_COUNT)
   const [material, setMaterial] = useState('')
+  // No default: the creator must choose how the child will play.
+  const [mode, setMode] = useState<GameMode | null>(null)
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
 
   const isLoading = status.kind === 'loading'
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
+    if (mode === null) return
     setStatus({ kind: 'loading' })
     try {
-      const result = await createGame({ subject, chapter, grade, material, count })
+      const result = await createGame({ subject, chapter, grade, mode, material, count })
       setStatus({ kind: 'success', result })
     } catch (error) {
       const message = error instanceof ApiError ? error.message : MESSAGES.unknown
@@ -121,7 +133,29 @@ function CreateGame() {
           </p>
         </div>
 
-        <button type="submit" className="primary-button" disabled={isLoading}>
+        <fieldset className="mode-picker">
+          <legend>{MODE_LEGEND}</legend>
+          {MODE_OPTIONS.map((option) => (
+            <label key={option.value} className="mode-option">
+              <input
+                type="radio"
+                name="mode"
+                value={option.value}
+                checked={mode === option.value}
+                onChange={() => setMode(option.value)}
+                aria-describedby={`mode-hint-${option.value}`}
+              />
+              <span className="mode-text">
+                <span className="mode-label">{option.label}</span>
+                <span id={`mode-hint-${option.value}`} className="mode-hint">
+                  {option.hint}
+                </span>
+              </span>
+            </label>
+          ))}
+        </fieldset>
+
+        <button type="submit" className="primary-button" disabled={isLoading || mode === null}>
           צור משחק
         </button>
       </form>
