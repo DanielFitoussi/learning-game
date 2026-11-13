@@ -22,6 +22,11 @@ It finds out where each child struggles and reports to teachers and parents.
 - Lint: `uv run ruff check .` (inside backend/)
 - Run the server locally: `uv run --env-file .env fastapi dev app/api.py` (inside backend/).
   API docs at http://127.0.0.1:8000/docs
+- Run the frontend dev server: `npm run dev` (inside frontend/).
+  The app is at http://localhost:5173
+- Run frontend tests: `npm test` (inside frontend/)
+- Lint the frontend: `npm run lint` (inside frontend/)
+- Build the frontend: `npm run build` (inside frontend/)
 
 ## Code style
 - Type hints on every function.
