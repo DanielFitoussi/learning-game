@@ -20,13 +20,18 @@ It finds out where each child struggles and reports to teachers and parents.
 ## Commands
 - Run tests: `uv run pytest` (inside backend/)
 - Lint: `uv run ruff check .` (inside backend/)
-- Run the server locally: `uv run --env-file .env fastapi dev app/api.py` (inside backend/).
+- Run the server locally: `uv run --env-file .env python -m fastapi dev app/api.py` (inside backend/).
   API docs at http://127.0.0.1:8000/docs
 - Run the frontend dev server: `npm run dev` (inside frontend/).
   The app is at http://localhost:5173
 - Run frontend tests: `npm test` (inside frontend/)
 - Lint the frontend: `npm run lint` (inside frontend/)
 - Build the frontend: `npm run build` (inside frontend/)
+- Run both servers for local work (two terminals, backend first):
+  1. Inside backend/: `uv run --env-file .env python -m fastapi dev app/api.py`
+  2. Inside frontend/: `npm run dev`, then open http://localhost:5173
+  The frontend calls `/api/...` and the Vite dev server forwards it to the backend
+  at http://127.0.0.1:8000 (without the `/api` prefix).
 
 ## Code style
 - Type hints on every function.

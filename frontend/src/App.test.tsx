@@ -8,4 +8,11 @@ describe('App', () => {
 
     expect(screen.getByRole('heading', { level: 1, name: 'משחק למידה' })).toBeInTheDocument()
   })
+
+  it('shows the create-game screen', () => {
+    render(<App />)
+
+    expect(screen.getByRole('heading', { level: 2, name: 'יצירת משחק חדש' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'צור משחק' })).toBeInTheDocument()
+  })
 })

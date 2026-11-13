@@ -1,8 +1,13 @@
+import CreateGame from './CreateGame.tsx'
+
 function App() {
   return (
     <main>
-      <h1>משחק למידה</h1>
-      <p>משחקים שעוזרים ללמוד.</p>
+      <header className="app-header">
+        <h1>משחק למידה</h1>
+        <p>משחקים שעוזרים ללמוד.</p>
+      </header>
+      <CreateGame />
     </main>
   )
 }
