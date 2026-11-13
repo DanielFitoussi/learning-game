@@ -66,6 +66,7 @@ BODY = {
     "subject": "math",
     "chapter": "addition",
     "grade": 2,
+    "mode": "test",
     "material": "When we add 7 and 5 we get 12.",
     "count": 3,
 }
@@ -115,7 +116,12 @@ def test_create_game_saves_game_and_questions(
     with Session(engine) as session:
         game = session.get(Game, body["game_id"])
         assert game is not None
-        assert (game.subject, game.chapter, game.grade) == ("math", "addition", 2)
+        assert (game.subject, game.chapter, game.grade, game.mode) == (
+            "math",
+            "addition",
+            2,
+            "test",
+        )
         prompts = [q.prompt for q in get_questions(session, body["game_id"])]
     assert prompts == ["כמה זה 1 + 5?", "כמה זה 2 + 5?", "כמה זה 3 + 5?"]
 
@@ -130,6 +136,18 @@ def test_create_game_reports_rejected_questions(client: TestClient) -> None:
     assert response.status_code == 201
     assert response.json()["question_count"] == 2
     assert response.json()["rejected"] == 1
+
+
+def test_create_game_saves_learning_mode(client: TestClient, engine: Engine) -> None:
+    use_model(good_model(3))
+
+    response = client.post("/games", json=BODY | {"mode": "learning"})
+
+    assert response.status_code == 201
+    with Session(engine) as session:
+        game = session.get(Game, response.json()["game_id"])
+    assert game is not None
+    assert game.mode == "learning"
 
 
 def test_count_defaults_to_5(client: TestClient) -> None:
@@ -156,6 +174,8 @@ def test_count_defaults_to_5(client: TestClient) -> None:
         ({"count": 0}, "count"),
         ({"count": MAX_QUESTIONS + 1}, "count"),
         ({"subject": ""}, "subject"),
+        ({"mode": "practice"}, "mode"),
+        ({"mode": ""}, "mode"),
     ],
 )
 def test_bad_input_gives_422_with_short_message(
@@ -174,14 +194,19 @@ def test_bad_input_gives_422_with_short_message(
     assert saved_games(engine) == 0
 
 
-def test_missing_field_gives_422(client: TestClient) -> None:
-    use_model(good_model(3))
-    body = {key: value for key, value in BODY.items() if key != "subject"}
+@pytest.mark.parametrize("field", ["subject", "mode"])
+def test_missing_field_gives_422(
+    client: TestClient, engine: Engine, field: str
+) -> None:
+    model = use_model(good_model(3))
+    body = {key: value for key, value in BODY.items() if key != field}
 
     response = client.post("/games", json=body)
 
     assert response.status_code == 422
-    assert response.json()["detail"].startswith("subject: ")
+    assert response.json()["detail"].startswith(f"{field}: ")
+    assert model.calls == 0
+    assert saved_games(engine) == 0
 
 
 # --- Generation failures: 502 ----------------------------------------------------
@@ -258,13 +283,13 @@ def test_startup_creates_the_tables(
 # --- Playing a game --------------------------------------------------------------
 
 
-def make_game(engine: Engine, count: int = 3) -> int:
+def make_game(engine: Engine, count: int = 3, mode: str = "test") -> int:
     """Save a game straight to the database, without the model."""
     game_questions = [
         Question.model_validate(question_dict(n)) for n in range(1, count + 1)
     ]
     with Session(engine) as session:
-        return save_game(session, "math", "addition", 2, game_questions)
+        return save_game(session, "math", "addition", 2, mode, game_questions)
 
 
 def question_ids(client: TestClient, game_id: int) -> list[int]:
@@ -272,7 +297,7 @@ def question_ids(client: TestClient, game_id: int) -> list[int]:
 
 
 def new_session(client: TestClient, game_id: int) -> int:
-    body = {"player_name": "Noa", "mode": "test"}
+    body = {"player_name": "Noa"}
     response = client.post(f"/games/{game_id}/sessions", json=body)
     assert response.status_code == 201
     return response.json()["session_id"]
@@ -287,40 +312,81 @@ def answer(question_id: int, chosen_text: str, time_ms: int = 1200) -> dict[str,
     return {"question_id": question_id, "chosen_text": chosen_text, "time_ms": time_ms}
 
 
+# GET /games/{game_id}
+
+
+def test_get_game_returns_its_details_and_question_count(
+    client: TestClient, engine: Engine
+) -> None:
+    game_id = make_game(engine, count=4, mode="learning")
+
+    response = client.get(f"/games/{game_id}")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "subject": "math",
+        "chapter": "addition",
+        "grade": 2,
+        "mode": "learning",
+        "question_count": 4,
+    }
+
+
+def test_get_unknown_game_is_404(client: TestClient) -> None:
+    response = client.get("/games/999")
+
+    assert response.status_code == 404
+    assert "game 999" in response.json()["detail"]
+
+
 # POST /games/{game_id}/sessions
 
 
-def test_start_session_returns_201_and_saves_trimmed_name(
-    client: TestClient, engine: Engine
-) -> None:
-    game_id = make_game(engine)
-
-    response = client.post(
-        f"/games/{game_id}/sessions", json={"player_name": "  Noa ", "mode": "learning"}
-    )
-
-    assert response.status_code == 201
-    session_id = response.json()["session_id"]
+def saved_session(engine: Engine, session_id: int) -> PlaySession:
     with Session(engine) as session:
         saved = session.get(PlaySession, session_id)
     assert saved is not None
-    assert (saved.game_id, saved.player_name, saved.mode) == (
-        game_id,
-        "Noa",
-        "learning",
+    return saved
+
+
+@pytest.mark.parametrize("mode", ["learning", "test"])
+def test_start_session_returns_201_and_saves_trimmed_name_and_game_mode(
+    client: TestClient, engine: Engine, mode: str
+) -> None:
+    game_id = make_game(engine, mode=mode)
+
+    response = client.post(f"/games/{game_id}/sessions", json={"player_name": "  Noa "})
+
+    assert response.status_code == 201
+    saved = saved_session(engine, response.json()["session_id"])
+    assert (saved.game_id, saved.player_name, saved.mode) == (game_id, "Noa", mode)
+
+
+@pytest.mark.parametrize("sent_mode", ["learning", "practice"])
+def test_start_session_ignores_mode_sent_by_the_client(
+    client: TestClient, engine: Engine, sent_mode: str
+) -> None:
+    game_id = make_game(engine, mode="test")
+
+    response = client.post(
+        f"/games/{game_id}/sessions",
+        json={"player_name": "Noa", "mode": sent_mode},
     )
+
+    assert response.status_code == 201
+    assert saved_session(engine, response.json()["session_id"]).mode == "test"
 
 
 def test_start_session_accepts_a_40_character_name(
     client: TestClient, engine: Engine
 ) -> None:
-    body = {"player_name": "a" * 40, "mode": "test"}
+    body = {"player_name": "a" * 40}
     response = client.post(f"/games/{make_game(engine)}/sessions", json=body)
     assert response.status_code == 201
 
 
 def test_start_session_for_unknown_game_is_404(client: TestClient) -> None:
-    body = {"player_name": "Noa", "mode": "test"}
+    body = {"player_name": "Noa"}
     response = client.post("/games/999/sessions", json=body)
 
     assert response.status_code == 404
@@ -330,10 +396,10 @@ def test_start_session_for_unknown_game_is_404(client: TestClient) -> None:
 @pytest.mark.parametrize(
     ("body", "field"),
     [
-        ({"player_name": "", "mode": "test"}, "player_name"),
-        ({"player_name": "   ", "mode": "test"}, "player_name"),
-        ({"player_name": "a" * 41, "mode": "test"}, "player_name"),
-        ({"player_name": "Noa", "mode": "practice"}, "mode"),
+        ({"player_name": ""}, "player_name"),
+        ({"player_name": "   "}, "player_name"),
+        ({"player_name": "a" * 41}, "player_name"),
+        ({}, "player_name"),
     ],
 )
 def test_start_session_rejects_bad_input(

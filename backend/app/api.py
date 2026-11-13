@@ -8,7 +8,7 @@ import logging
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from functools import cache
-from typing import Annotated, Literal
+from typing import Annotated
 
 import openai
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -23,8 +23,16 @@ from app.errors import DuplicateAnswerError, GenerationError, NotFoundError
 from app.generation import MAX_MATERIAL_CHARS, MAX_QUESTIONS, generate_questions
 from app.grades import check_grade
 from app.llm import OpenAITextModel
+from app.modes import Mode
 from app.questions import NonEmptyStr
-from app.storage import get_questions, save_answer, save_game, start_session
+from app.storage import (
+    count_questions,
+    get_game,
+    get_questions,
+    save_answer,
+    save_game,
+    start_session,
+)
 from app.text_model import TextModel
 
 logger = logging.getLogger(__name__)
@@ -141,6 +149,7 @@ class CreateGameRequest(BaseModel):
     subject: NonEmptyStr
     chapter: NonEmptyStr
     grade: int
+    mode: Mode
     material: str = Field(max_length=MAX_MATERIAL_CHARS)
     count: int = Field(default=DEFAULT_COUNT, ge=1, le=MAX_QUESTIONS)
 
@@ -187,11 +196,37 @@ def create_game(
     except ValueError as error:
         raise bad_input(error) from error
 
-    game_id = save_game(db, body.subject, body.chapter, body.grade, result.questions)
+    game_id = save_game(
+        db, body.subject, body.chapter, body.grade, body.mode, result.questions
+    )
     return CreateGameResponse(
         game_id=game_id,
         question_count=len(result.questions),
         rejected=result.rejected,
+    )
+
+
+# --- GET /games/{game_id} --------------------------------------------------------
+
+
+class GameInfo(BaseModel):
+    subject: str
+    chapter: str
+    grade: int
+    mode: Mode
+    question_count: int
+
+
+@app.get("/games/{game_id}", response_model=GameInfo)
+def read_game(game_id: int, db: DbSession) -> GameInfo:
+    """What a game is about and how it is played. No questions or answers."""
+    game = get_game(db, game_id)
+    return GameInfo(
+        subject=game.subject,
+        chapter=game.chapter,
+        grade=game.grade,
+        mode=game.mode,
+        question_count=count_questions(db, game_id),
     )
 
 
@@ -206,8 +241,13 @@ PlayerName = Annotated[
 
 
 class StartSessionRequest(BaseModel):
+    """Only the player's name. The mode comes from the game.
+
+    Extra fields are ignored, so an older client that still sends "mode" works,
+    but its value is never used.
+    """
+
     player_name: PlayerName
-    mode: Literal["learning", "test"]
 
 
 class StartSessionResponse(BaseModel):
@@ -224,7 +264,7 @@ def create_session(
 ) -> StartSessionResponse:
     """Start a session of one child playing one game."""
     try:
-        session_id = start_session(db, game_id, body.player_name, body.mode)
+        session_id = start_session(db, game_id, body.player_name)
     except ValueError as error:
         raise bad_input(error) from error
     return StartSessionResponse(session_id=session_id)

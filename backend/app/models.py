@@ -18,6 +18,8 @@ class Game(SQLModel, table=True):
     subject: str
     chapter: str
     grade: int
+    mode: str
+    """One of app.modes.MODES, set by the teacher."""
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -44,7 +46,7 @@ class PlaySession(SQLModel, table=True):
     game_id: int = Field(foreign_key="game.id", index=True)
     player_name: str
     mode: str
-    """"learning" or "test"."""
+    """Copied from the game when the session starts. One of app.modes.MODES."""
     started_at: datetime = Field(default_factory=utc_now)
 
 
