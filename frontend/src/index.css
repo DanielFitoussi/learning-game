@@ -1,11 +1,372 @@
+:root {
+  --bg: #fdf8f3;
+  --bg-glow: #fde9d9;
+  --card: #ffffff;
+  --text: #2f2a3b;
+  --muted: #6e6880;
+  --border: #e6dfd6;
+  --primary: #6c5ce7;
+  --primary-dark: #5443d6;
+  --primary-soft: #ece9fd;
+  --accent: #ffc94a;
+  --wand: #3d3553;
+  --success-bg: #e9f8ef;
+  --success-border: #9bdbb5;
+  --error-bg: #fdecec;
+  --error-text: #a12d2d;
+  --confetti-1: #ff8fa3;
+  --confetti-2: #ffc94a;
+  --confetti-3: #6c5ce7;
+  --confetti-4: #4cc9a0;
+  --radius: 18px;
+  --shadow: 0 10px 30px rgb(80 60 120 / 0.1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
-  font-family: system-ui, sans-serif;
+  font-family: 'Rubik', system-ui, sans-serif;
+  font-size: 18px;
   line-height: 1.5;
+  color: var(--text);
+  background: radial-gradient(circle at top right, var(--bg-glow), var(--bg) 45%);
+  background-color: var(--bg);
+  min-height: 100vh;
 }
 
 main {
-  padding: 2rem 1rem;
-  max-width: 40rem;
+  padding: 2rem 1rem 3rem;
+  max-width: 44rem;
   margin: 0 auto;
+}
+
+.app-header {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 2.2rem;
+  color: var(--primary-dark);
+}
+
+.app-header p {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+}
+
+/* --- Card and form ------------------------------------------------------------ */
+
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.75rem;
+}
+
+.card h2 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.card-intro {
+  margin: 0.25rem 0 1.5rem;
+  color: var(--muted);
+}
+
+.create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+@media (max-width: 520px) {
+  .field-row {
+    grid-template-columns: 1fr;
+  }
+
+  .card {
+    padding: 1.25rem;
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.field label {
+  font-weight: 500;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  width: 100%;
+  padding: 0.7rem 0.9rem;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 12rem;
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: #cfc6f7;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 4px var(--primary-soft);
+}
+
+.counter {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+  text-align: left;
+}
+
+.primary-button {
+  font: inherit;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #fff;
+  background: var(--primary);
+  border: none;
+  border-radius: 14px;
+  padding: 0.9rem 1.5rem;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgb(108 92 231 / 0.3);
+  transition:
+    background 0.15s ease,
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.primary-button:hover:not(:disabled) {
+  background: var(--primary-dark);
+  transform: translateY(-2px);
+}
+
+.primary-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px var(--primary-soft), 0 6px 16px rgb(108 92 231 / 0.3);
+}
+
+.primary-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+  box-shadow: none;
+}
+
+/* --- Messages --------------------------------------------------------------- */
+
+.message {
+  margin: 1.25rem 0 0;
+  padding: 0.9rem 1.1rem;
+  border-radius: 12px;
+}
+
+.message-error {
+  background: var(--error-bg);
+  color: var(--error-text);
+  font-weight: 500;
+}
+
+/* --- Loading: wand and sparkles ---------------------------------------------- */
+
+.loader {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  padding: 1rem 1.25rem;
+  border-radius: 14px;
+  background: var(--primary-soft);
+}
+
+.loader p {
+  margin: 0;
+}
+
+.loader-title {
+  font-weight: 700;
+  color: var(--primary-dark);
+}
+
+.loader-line {
+  color: var(--muted);
+  animation: fade-in 0.4s ease;
+}
+
+.wand {
+  flex-shrink: 0;
+  transform-origin: 30% 80%;
+  animation: wave 1.6s ease-in-out infinite;
+}
+
+.sparkle {
+  fill: var(--accent);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: twinkle 1.2s ease-in-out infinite;
+}
+
+.sparkle-2 {
+  animation-delay: 0.4s;
+}
+
+.sparkle-3 {
+  animation-delay: 0.8s;
+}
+
+@keyframes wave {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(-12deg);
+  }
+}
+
+@keyframes twinkle {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.6);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* --- Success: pop-in card with light confetti -------------------------------- */
+
+.success-card {
+  position: relative;
+  overflow: hidden;
+  margin-top: 1.25rem;
+  padding: 1.25rem 1.5rem;
+  border-radius: 16px;
+  background: var(--success-bg);
+  border: 2px solid var(--success-border);
+  text-align: center;
+  animation: pop-in 0.45s cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+
+.success-card p {
+  margin: 0.2rem 0;
+  position: relative;
+}
+
+.success-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.game-number {
+  font-size: 1.6rem;
+  color: var(--primary-dark);
+}
+
+.success-note {
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+
+.confetti {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.confetti span {
+  position: absolute;
+  top: -12px;
+  left: var(--left);
+  width: 8px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--color);
+  opacity: 0;
+  animation: confetti-fall 1.6s ease-in var(--delay) 1 forwards;
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes confetti-fall {
+  0% {
+    opacity: 1;
+    transform: translateY(0) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(180px) rotate(360deg);
+  }
+}
+
+/* --- Motion turned off: same screen, no animations --------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .confetti {
+    display: none;
+  }
+
+  .primary-button:hover:not(:disabled) {
+    transform: none;
+  }
 }
